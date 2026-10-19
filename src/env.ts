@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { JWTPayload } from 'hono/utils/jwt/types'
 import type { Database } from './types/db'
 
 export type AuthUser = {
@@ -13,5 +14,7 @@ export type AppEnv = {
     user: AuthUser
     supabase: SupabaseClient<Database>
     requestId: string
+    /** Set by Hono's jwk middleware; read only by middleware/auth.ts */
+    jwtPayload: JWTPayload
   }
 }
