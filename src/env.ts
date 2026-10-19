@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { Database } from './types/db'
 
 export type AuthUser = {
   id: string
@@ -10,7 +11,7 @@ export type AppEnv = {
   Bindings: CloudflareBindings
   Variables: {
     user: AuthUser
-    supabase: SupabaseClient
+    supabase: SupabaseClient<Database>
     requestId: string
   }
 }
