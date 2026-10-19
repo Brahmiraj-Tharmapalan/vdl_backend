@@ -1,38 +1,61 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "vdl_backend",
+  "name": "vdl-backend-dev",
   "main": "src/index.ts",
-  "compatibility_date": "2026-10-19"
-  // "compatibility_flags": [
-  //   "nodejs_compat"
-  // ],
-  // "vars": {
-  //   "MY_VAR": "my-variable"
-  // },
-  // "kv_namespaces": [
-  //   {
-  //     "binding": "MY_KV_NAMESPACE",
-  //     "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  //   }
-  // ],
-  // "r2_buckets": [
-  //   {
-  //     "binding": "MY_BUCKET",
-  //     "bucket_name": "my-bucket"
-  //   }
-  // ],
-  // "d1_databases": [
-  //   {
-  //     "binding": "MY_DB",
-  //     "database_name": "my-database",
-  //     "database_id": ""
-  //   }
-  // ],
-  // "ai": {
-  //   "binding": "AI"
-  // },
-  // "observability": {
-  //   "enabled": true,
-  //   "head_sampling_rate": 1
-  // }
+  "compatibility_date": "2026-10-19",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  // Daily reminders at 02:00 UTC = 07:30 Asia/Colombo
+  "triggers": {
+    "crons": ["0 2 * * *"]
+  },
+
+  // Top level = dev (used by `npm run dev`, `npm run deploy` and tests)
+  "vars": {
+    "ENVIRONMENT": "development",
+    "SUPABASE_URL": "https://your-dev-project.supabase.co",
+    "SUPABASE_JWKS_URL": "https://your-dev-project.supabase.co/auth/v1/.well-known/jwks.json",
+    "SUPABASE_JWT_ISSUER": "https://your-dev-project.supabase.co/auth/v1",
+    "EMAIL_FROM": "Vehicle Doc Lanka <reminders@example.com>"
+  },
+  "ratelimits": [
+    {
+      "name": "RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 100, "period": 60 }
+    },
+    {
+      "name": "STRICT_RATE_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 10, "period": 60 }
+    }
+  ],
+
+  // `vars` and `ratelimits` are not inherited, so production repeats them
+  "env": {
+    "production": {
+      "name": "vdl-backend",
+      "vars": {
+        "ENVIRONMENT": "production",
+        "SUPABASE_URL": "https://your-prod-project.supabase.co",
+        "SUPABASE_JWKS_URL": "https://your-prod-project.supabase.co/auth/v1/.well-known/jwks.json",
+        "SUPABASE_JWT_ISSUER": "https://your-prod-project.supabase.co/auth/v1",
+        "EMAIL_FROM": "Vehicle Doc Lanka <reminders@example.com>"
+      },
+      "ratelimits": [
+        {
+          "name": "RATE_LIMITER",
+          "namespace_id": "2001",
+          "simple": { "limit": 100, "period": 60 }
+        },
+        {
+          "name": "STRICT_RATE_LIMITER",
+          "namespace_id": "2002",
+          "simple": { "limit": 10, "period": 60 }
+        }
+      ]
+    }
+  }
 }

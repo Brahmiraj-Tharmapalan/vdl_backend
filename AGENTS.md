@@ -11,15 +11,16 @@ The app is local-first. Users without an account keep data on the phone (local n
 - `@supabase/supabase-js`, `zod` + `@hono/zod-validator`
 - Cloudflare Cron Triggers (reminders), Rate Limiting binding
 - Expo Push API (push), Resend (email)
-- Vitest + `@cloudflare/vitest-pool-workers`
+- Vitest + `@cloudflare/vitest-plugin` (renamed from `@cloudflare/vitest-pool-workers`)
 
 ## Commands
 
 - `npm run dev` — local server on http://localhost:8787
-- `npm run deploy` — deploy to Cloudflare
+- `npm run deploy` — deploy the dev Worker to Cloudflare
 - `npm run test` — tests; `npx tsc --noEmit` — typecheck
-- `npm run cf-typegen` — regenerate binding types after changing `wrangler.jsonc`
-- `npx hono request -P /v1/health src/index.ts` — send a request via `app.request()` without a server
+- `npm run cf-typegen` — regenerate `worker-configuration.d.ts` after changing `wrangler.jsonc` or secret names
+- `npm run deploy:prod` — deploy the `production` env (top-level config is dev)
+- `npx hono request /v1/health src/app.ts` — send a request via `app.request()` without a server (run from PowerShell; Git Bash rewrites the leading `/`)
 - `npx hono search <query>` / `npx hono docs <path>` — read current Hono docs; use these instead of guessing APIs
 - `npx supabase migration new <name>` then `npx supabase db push` — schema changes
 - `npx supabase gen types typescript --project-id <id> > src/types/db.ts`
@@ -31,7 +32,8 @@ After any change: typecheck, run tests, and hit the changed routes with `npx hon
 
 ```
 src/
-  index.ts          # app, global middleware, app.route() mounts, export { fetch, scheduled }
+  app.ts            # Hono app: global middleware, app.route() mounts (target for `hono request`)
+  index.ts          # Worker entry: export default { fetch, scheduled }
   env.ts            # AppEnv = { Bindings, Variables: { user, supabase, requestId } }
   middleware/       # auth.ts, rate-limit.ts, logger.ts
   routes/           # me, dashboard, vehicles, documents, reminders, sync, devices
@@ -74,7 +76,7 @@ DB rules:
 - Trigger: create `profiles` row on `auth.users` insert (`security definer`, `set search_path = ''`).
 - Run Supabase Security Advisor after every migration.
 
-## Middleware order (`src/index.ts`)
+## Middleware order (`src/app.ts`)
 
 1. `requestId()` → 2. logger (JSON, no PII) → 3. `secureHeaders()` → 4. `bodyLimit` 100 KB (`/v1/sync` 1 MB) → 5. `timeout(10_000)` → 6. `auth` → 7. `rateLimit` → 8. routes with `validate()` → 9. `app.onError` + `app.notFound`.
 
