@@ -25,6 +25,11 @@ const app = new Hono<AppEnv>()
 app.use(requestId())
 app.use(logger)
 app.use(secureHeaders())
+// Responses carry personal data (plates, email): never let a cache or proxy keep them.
+app.use(async (c, next) => {
+  await next()
+  c.header('Cache-Control', 'no-store')
+})
 app.use('/v1/sync', bodyLimit({ maxSize: 1024 * KB }))
 app.use(except('/v1/sync', bodyLimit({ maxSize: 100 * KB })))
 app.use(timeout(10_000))

@@ -98,6 +98,8 @@ describe('POST /v1/devices', () => {
     ['a missing token', { platform: 'android' }],
     ['an empty token', { pushToken: '  ', platform: 'android' }],
     ['a too-long token', { pushToken: 'x'.repeat(256), platform: 'android' }],
+    ['a non-Expo token', { pushToken: 'fcm:abc123', platform: 'android' }],
+    ['an empty Expo token', { pushToken: 'ExponentPushToken[]', platform: 'android' }],
     ['a bad platform', { pushToken: PUSH_TOKEN, platform: 'windows' }],
     ['a too-long device name', { pushToken: PUSH_TOKEN, platform: 'ios', deviceName: 'x'.repeat(101) }],
   ])('rejects %s with 400', async (_name, body) => {

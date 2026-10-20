@@ -41,14 +41,17 @@ export function buildReminderRows(
 }
 
 /**
- * Rebuilds a document's `scheduled` reminder rows (AGENTS.md rule 8) via the `security definer`
- * `rebuild_reminders` RPC, because users can only select `reminders`.
+ * Rebuilds the `scheduled` reminder rows of one or more documents (AGENTS.md rule 8) via the
+ * `security definer` `rebuild_reminders` RPC, because users can only select `reminders`.
+ * Several documents go in one call (one subrequest, however many).
  */
 export async function rebuildReminders(
   client: SupabaseClient<Database>,
-  doc: Pick<Doc, 'id'>,
+  docs: Pick<Doc, 'id'> | readonly Pick<Doc, 'id'>[],
 ): Promise<void> {
-  const { error } = await client.rpc('rebuild_reminders', { p_document_ids: [doc.id] })
+  const ids = (Array.isArray(docs) ? docs : [docs]).map((d: Pick<Doc, 'id'>) => d.id)
+  if (ids.length === 0) return
+  const { error } = await client.rpc('rebuild_reminders', { p_document_ids: ids })
   if (error) throw dbError(error)
 }
 

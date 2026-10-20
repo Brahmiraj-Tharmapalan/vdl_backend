@@ -78,7 +78,14 @@ export function reminderMessage(
 
 export const PUSH_TITLE = 'Vehicle Doc Lanka'
 
-export type PushItem = { reminderId: string; userId: string; documentId: string; body: string }
+/** One push per user: all their due push reminders in one message (bounded cost per user). */
+export type PushItem = {
+  userId: string
+  reminderIds: string[]
+  /** Set only when the push is about one document, so the app can open it. */
+  documentId: string | null
+  body: string
+}
 
 export type EmailLine = { message: string; nickname: string | null }
 
@@ -87,10 +94,21 @@ export type EmailItem = { userId: string; to: string; reminderIds: string[]; lin
 export type DeliveryPlan = {
   /** Rows decided without sending (skipped, or failed to render). */
   results: ReminderResult[]
-  /** One per push reminder; the cron fans each out to the user's devices. */
+  /** One per user; the cron fans each out to the user's devices. */
   push: PushItem[]
   /** One per user. */
   emails: EmailItem[]
+}
+
+const byExpiry = (a: DueReminder, b: DueReminder) =>
+  a.expiry_date < b.expiry_date ? -1 : a.expiry_date > b.expiry_date ? 1 : 0
+
+/** `Insurance · CAB-1234 expires in 5 days (25 Oct 2026)`, plus ` and 2 more` for several. */
+export function pushBody(rows: readonly DueReminder[], today: IsoDate): string {
+  const [first] = rows
+  if (!first) throw new Error('pushBody needs at least one row')
+  const more = rows.length - 1
+  return more === 0 ? reminderMessage(first, today) : `${reminderMessage(first, today)} and ${more} more`
 }
 
 /**
@@ -100,7 +118,8 @@ export type DeliveryPlan = {
  * - email with no reminder_email → skipped `no_email`
  * - several due rows for one doc + channel (missed runs) → only the nearest (smallest
  *   days_before) is sent, the rest skipped `superseded`
- * A user whose rows fail to render gets `render_error` without affecting other users.
+ * The rest becomes one push and one email per user, soonest expiry first. A user whose rows
+ * fail to render gets `render_error` without affecting other users.
  */
 export function planDelivery(rows: DueReminder[], today: IsoDate): DeliveryPlan {
   const results: ReminderResult[] = []
@@ -117,7 +136,6 @@ export function planDelivery(rows: DueReminder[], today: IsoDate): DeliveryPlan 
   for (const [userId, userRows] of byUser) {
     try {
       const userResults: ReminderResult[] = []
-      const userPush: PushItem[] = []
       const nearest = new Map<string, DueReminder>()
 
       for (const row of userRows) {
@@ -137,24 +155,23 @@ export function planDelivery(rows: DueReminder[], today: IsoDate): DeliveryPlan 
         userResults.push({ id: drop.id, status: 'skipped', error: 'superseded' })
       }
 
-      const emailRows: DueReminder[] = []
-      for (const row of nearest.values()) {
-        if (row.channel === 'push') {
-          userPush.push({
-            reminderId: row.id,
-            userId,
-            documentId: row.document_id,
-            body: reminderMessage(row, today),
-          })
-        } else {
-          emailRows.push(row)
+      const kept = [...nearest.values()].sort(byExpiry)
+      const pushRows = kept.filter((r) => r.channel === 'push')
+      const emailRows = kept.filter((r) => r.channel === 'email')
+
+      let userPush: PushItem | undefined
+      if (pushRows.length > 0) {
+        userPush = {
+          userId,
+          reminderIds: pushRows.map((r) => r.id),
+          documentId: pushRows.length === 1 ? (pushRows[0]?.document_id ?? null) : null,
+          body: pushBody(pushRows, today),
         }
       }
 
       let email: EmailItem | undefined
       const to = emailRows[0]?.reminder_email
       if (emailRows.length > 0 && to) {
-        emailRows.sort((a, b) => (a.expiry_date < b.expiry_date ? -1 : a.expiry_date > b.expiry_date ? 1 : 0))
         email = {
           userId,
           to,
@@ -164,7 +181,7 @@ export function planDelivery(rows: DueReminder[], today: IsoDate): DeliveryPlan 
       }
 
       results.push(...userResults)
-      push.push(...userPush)
+      if (userPush) push.push(userPush)
       if (email) emails.push(email)
     } catch {
       for (const row of userRows) results.push({ id: row.id, status: 'failed', error: 'render_error' })

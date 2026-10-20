@@ -120,7 +120,7 @@ vehicles.delete('/:id', validate('param', idParam), async (c) => {
     .is('deleted_at', null)
     .select('*')
   if (docs.error) throw dbError(docs.error)
-  for (const doc of docs.data) await rebuildReminders(supabase, doc)
+  await rebuildReminders(supabase, docs.data)
 
   const vehicle = await supabase
     .from('vehicles')

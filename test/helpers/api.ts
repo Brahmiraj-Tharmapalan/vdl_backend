@@ -25,10 +25,16 @@ export type Harness = {
   calls: SupabaseCall[]
   /** Responds to Supabase requests; set per test. */
   supabase: (handler: Handler) => void
-  token: (sub?: string) => Promise<string>
+  /** `claims` override or add JWT claims (e.g. an old `amr` sign-in time). */
+  token: (sub?: string, claims?: Record<string, unknown>) => Promise<string>
   call: (path: string, init?: RequestInit) => Promise<Response>
   /** `call` with a Bearer token for `sub` (default user A). */
-  authed: (path: string, init?: RequestInit, sub?: string) => Promise<Response>
+  authed: (
+    path: string,
+    init?: RequestInit,
+    sub?: string,
+    claims?: Record<string, unknown>,
+  ) => Promise<Response>
 }
 
 const now = () => Math.floor(Date.now() / 1000)
@@ -71,7 +77,7 @@ export async function setupHarness(): Promise<Harness> {
     STRICT_RATE_LIMITER: { limit: strictLimit },
   })
 
-  const token = (sub = USER_A) =>
+  const token = (sub = USER_A, claims: Record<string, unknown> = {}) =>
     signJwt(signingKey, {
       iss: env.SUPABASE_JWT_ISSUER,
       aud: 'authenticated',
@@ -79,17 +85,19 @@ export async function setupHarness(): Promise<Harness> {
       sub,
       email: `${sub.slice(0, 4)}@example.com`,
       session_id: 'sess-1',
+      amr: [{ method: 'oauth', timestamp: now() - 60 }],
       iat: now() - 10,
       exp: now() + 3600,
+      ...claims,
     })
 
   const call = async (path: string, init: RequestInit = {}) =>
     app.request(`https://api.test${path}`, init, testEnv())
 
-  const authed = async (path: string, init: RequestInit = {}, sub = USER_A) =>
+  const authed = async (path: string, init: RequestInit = {}, sub = USER_A, claims = {}) =>
     call(path, {
       ...init,
-      headers: { ...init.headers, Authorization: `Bearer ${await token(sub)}` },
+      headers: { ...init.headers, Authorization: `Bearer ${await token(sub, claims)}` },
     })
 
   return {

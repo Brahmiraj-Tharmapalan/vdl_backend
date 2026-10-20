@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { AppEnv, AuthUser } from '../env'
-import { notFound } from '../lib/errors'
+import { errorBody, notFound, reauthRequired } from '../lib/errors'
 import { toProfile } from '../lib/mappers'
 import { rebuildAllReminders } from '../lib/reminders'
 import { dbError, serviceClient } from '../lib/supabase'
@@ -27,6 +27,16 @@ function toProfileUpdate(body: UpdateProfileBody): TablesUpdate<'profiles'> {
   return update
 }
 
+/** DELETE /me needs a sign-in this recent, so a leaked token alone can't delete the account. */
+export const REAUTH_WINDOW_S = 10 * 60
+
+/**
+ * Reminders may only go to the account's own (provider-verified) email, so the service can't be
+ * used to mail strangers. Compared case-insensitively.
+ */
+const isOwnEmail = (user: AuthUser, email: string) =>
+  user.email !== undefined && user.email.toLowerCase() === email.toLowerCase()
+
 const me = new Hono<AppEnv>()
 
 me.get('/', async (c) => {
@@ -42,6 +52,10 @@ me.get('/', async (c) => {
 
 me.patch('/', validate('json', updateProfileBody), async (c) => {
   const body = c.req.valid('json')
+  if (body.reminderEmail && !isOwnEmail(c.var.user, body.reminderEmail)) {
+    const details = [{ path: 'reminderEmail', message: 'Must be the email you signed in with' }]
+    return c.json(errorBody('validation_failed', 'Invalid request', c.var.requestId, details), 400)
+  }
   const { data, error } = await c.var.supabase
     .from('profiles')
     .update(toProfileUpdate(body))
@@ -60,6 +74,10 @@ me.patch('/', validate('json', updateProfileBody), async (c) => {
 // Deleting the auth user cascades to every synced row (all FKs are on delete cascade).
 // The only route allowed to use the service-role client (AGENTS.md rule 7).
 me.delete('/', strictRateLimit, async (c) => {
+  const { signedInAt } = c.var.user
+  if (signedInAt === undefined || Date.now() / 1000 - signedInAt > REAUTH_WINDOW_S) {
+    throw reauthRequired()
+  }
   const { error } = await serviceClient(c.env).auth.admin.deleteUser(c.var.user.id)
   if (error) throw dbError(error)
   return c.body(null, 204)

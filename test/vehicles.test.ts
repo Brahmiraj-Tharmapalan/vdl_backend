@@ -217,8 +217,10 @@ describe('DELETE /v1/vehicles/:id', () => {
     expect(h.calls[1]?.url.searchParams.get('vehicle_id')).toBe(`eq.${VEHICLE_ID}`)
     expect(h.calls[1]?.body).toEqual({ deleted_at: deletedAt })
     expect(h.calls[2]?.body).toEqual({ deleted_at: deletedAt })
-    expect(rebuildReminders).toHaveBeenCalledTimes(2)
-    expect(vi.mocked(rebuildReminders).mock.calls.map(([, d]) => d.id)).toEqual([DOC_ID, VEHICLE_ID])
+    // One RPC call for all documents, so a big vehicle stays within the subrequest limit.
+    expect(rebuildReminders).toHaveBeenCalledTimes(1)
+    const [, docs] = vi.mocked(rebuildReminders).mock.calls[0] ?? []
+    expect((docs as { id: string }[]).map((d) => d.id)).toEqual([DOC_ID, VEHICLE_ID])
   })
 
   it("returns 404 for user B on user A's vehicle without touching documents", async () => {

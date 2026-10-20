@@ -57,28 +57,32 @@ scripts/             # dev-token.mjs, smoke.mjs (live smoke test, not part of `n
 - `vehicles`: id, user_id, nickname, plate_number, type (car | motorbike | three_wheeler | van), client_updated_at, deleted_at
 - `documents`: id, user_id, vehicle_id, type (revenue_licence | insurance | emission_test | registration | custom), custom_name, expiry_date, reminder_days int[], push_enabled, email_enabled, client_updated_at, deleted_at
 - `reminders`: id, user_id, document_id, days_before, send_on, channel (push | email), status (scheduled | sending | sent | failed | skipped), sent_at, error (short code), claimed_at; unique (document_id, days_before, channel, send_on), so a Renew gets fresh rows while sent history stays
-- `devices`: id, user_id, push_token unique, platform (ios | android), device_name, last_seen_at
+- `devices`: id, user_id, push_token unique (Expo format `ExponentPushToken[...]` / `ExpoPushToken[...]`, CHECK + zod), platform (ios | android), device_name, last_seen_at
 - All tables have `created_at` + `updated_at`. A trigger always sets `updated_at = now()`, so it is the trusted sync cursor.
 - `client_updated_at` (vehicles, documents) is the client's `updatedAt`, used only for last-write-wins and never exposed. Sync sets it. An update that leaves it unchanged (every REST write) gets `now()` from a trigger.
 
 RPCs (`security definer`):
-- `register_device(p_push_token, p_platform, p_device_name)`: upserts a device by push token for `auth.uid()`, taking it over from another account. Used by `POST /v1/devices`.
+- `register_device(p_push_token, p_platform, p_device_name)`: upserts a device by push token for `auth.uid()`, taking it over from another account, and keeps ≤ 10 devices per user (evicts the least recently seen). Used by `POST /v1/devices`.
 - `rebuild_reminders(p_document_ids uuid[] default null)`: for the caller's docs (null = all live ones; foreign/missing ids skipped) deletes `scheduled` rows, then inserts the new ones with Colombo "today" and `on conflict do nothing`. Used by `lib/reminders.ts`.
-- `sync_changes(p_last_synced_at default null, p_vehicles jsonb, p_documents jsonb)`: the whole sync push + pull in one transaction (see Sync). It bypasses RLS, so every statement filters by `auth.uid()`. Smoke test: `npx supabase db query --linked --yes -f supabase/tests/sync_smoke.sql` (rolled back).
-- Cron only (execute granted to `service_role` alone): `claim_due_reminders(p_today, p_limit)` first fails `sending` rows claimed > 1 h ago (`interrupted`), then sets due `scheduled` rows of whole users to `sending` and returns them joined with doc/vehicle/profile. `finish_reminders(p_results jsonb)` sets `sending` rows to sent/failed/skipped, or back to `scheduled` (never attempted). Smoke test: `supabase/tests/cron_smoke.sql`.
+- `sync_changes(p_last_synced_at default null, p_vehicles jsonb, p_documents jsonb)`: the whole sync push + pull in one transaction (see Sync). Rejects > 500 rows per array (22023), then calls the internal `sync_changes_unchecked` (no grants). It bypasses RLS, so every statement filters by `auth.uid()`. Smoke test: `npx supabase db query --linked --yes -f supabase/tests/sync_smoke.sql` (rolled back).
+- Cron only (execute granted to `service_role` alone): `claim_due_reminders(p_today, p_limit)` first fails `sending` rows claimed > 1 h ago (`interrupted`), then sets all due `scheduled` rows of `p_limit` users (oldest due `send_on` first, ties by a daily md5 hash, never by user_id) to `sending` and returns them joined with doc/vehicle/profile. `finish_reminders(p_results jsonb)` sets `sending` rows to sent/failed/skipped, or back to `scheduled` (never attempted). Smoke test: `supabase/tests/cron_smoke.sql`. `supabase/tests/harden_smoke.sql` covers the hardening rules below.
 
 Rules:
 - RLS on every table: `user_id = (select auth.uid())` for using + with check (`id` for profiles). Users may only select `reminders`.
 - A document's `vehicle_id` must be the same user's (composite FK + policy + code).
 - `check` constraints match the zod limits. A trigger creates the `profiles` row on `auth.users` insert.
+- **The Data API is reachable directly** (the app ships the anon key), so the DB enforces every rule itself, not just the Worker:
+  - Quotas (`enforce_user_quota` trigger, SQLSTATE `VDL01` → `dbError` → 409 `limit_reached`): vehicles 50 live / 500 total, documents 300 live / 3000 total. Upserts of existing ids don't count.
+  - Column-level grants: users write only the columns the routes write (no `client_updated_at`, `created_at`, `last_synced_at`, `user_id` updates; no direct device inserts). Add a column to a grant when a route starts writing it.
+  - `client_updated_at` is clamped to ≤ now() + 5 min. A soft-deleted vehicle/document can't be updated (`keep_deleted` skips it). `reminder_email` must be the auth user's email (trigger, case-insensitive).
 - When RLS blocks a write a route needs, add a `security definer` RPC instead of using the service role. It must `set search_path = ''`, take the user only from `auth.uid()`, `revoke execute ... from public, anon` and `grant ... to authenticated`.
 
 ## Request pipeline (`src/app.ts`)
 
-`requestId()` → logger (JSON, no PII) → `secureHeaders()` → `bodyLimit` 100 KB (`/v1/sync` 1 MB) → `timeout(10_000)` → `auth` → `rateLimit` → routes with `validate()` → `app.onError` + `app.notFound`.
+`requestId()` → logger (JSON, no PII) → `secureHeaders()` → `Cache-Control: no-store` → `bodyLimit` 100 KB (`/v1/sync` 1 MB) → `timeout(10_000)` → `auth` → `rateLimit` → routes with `validate()` → `app.onError` + `app.notFound`.
 
 - No CORS (mobile only) and no CSRF (Bearer tokens, no cookies). `/v1/health` is the only public route. An unknown path without a valid token gets `401`, not `404`.
-- **Auth** (`middleware/auth.ts`): Hono `jwk` with `SUPABASE_JWKS_URL`, `ES256`/`RS256` only. It checks `iss`, `aud = 'authenticated'`, `role = 'authenticated'`, `sub` and `exp`, else `401`. The token comes only from `Authorization: Bearer`. It sets `c.var.user = { id, email, sessionId }` and `c.var.supabase = userClient(env, token)`.
+- **Auth** (`middleware/auth.ts`): Hono `jwk` with `SUPABASE_JWKS_URL`, `ES256`/`RS256` only. It checks `iss`, `aud = 'authenticated'`, `role = 'authenticated'`, `sub` and `exp`, else `401`. The token comes only from `Authorization: Bearer`. It sets `c.var.user = { id, email, sessionId, signedInAt }` (`signedInAt` = latest `amr` timestamp, which survives refreshes, unlike `iat`) and `c.var.supabase = userClient(env, token)`.
 - **Rate limits**, keyed by user ID: `RATE_LIMITER` 100/min on all authed routes. `STRICT_RATE_LIMITER` 10/min via `strictRateLimit` on `/v1/sync`, `POST /v1/devices` and `DELETE /v1/me`.
 
 ## Validation, errors, logging
@@ -92,14 +96,14 @@ Rules:
 ## API (`/v1`)
 
 - `GET /health` (public)
-- `GET | PATCH | DELETE /me`: profile + settings. DELETE removes the auth user, and the FKs cascade to all data.
+- `GET | PATCH | DELETE /me`: profile + settings. `reminderEmail` must be the sign-in email or null (else 400), so reminders can't be sent to strangers. DELETE needs a sign-in ≤ 10 min old (else 403 `reauth_required`: the app re-signs in), then removes the auth user, and the FKs cascade to all data.
 - `GET /dashboard`: `{ counts: { vehicles, documents, toRenew }, upcoming }`. Only live docs on live vehicles count. `upcoming` = 5 soonest `expiry_date` (expired first; ties by created_at, id), each `toDocument` + `vehicle` summary. Logic in `lib/dashboard.ts`.
 - `GET | POST /vehicles`, `GET | PATCH | DELETE /vehicles/:id`
 - `GET /documents?filter=all|to_renew|valid`, `POST /vehicles/:id/documents`, `GET | PATCH | DELETE /documents/:id` (PATCH with a new expiryDate = Renew)
 - `GET /reminders/upcoming?limit=1..100` (default 50): `scheduled`, `send_on >= today`, live doc + vehicle (embedded `!inner` select), by send_on, id. Each `toReminder` + `document` + `vehicle` summary.
 - `POST /sync`: see Sync
 - `GET | POST /devices`, `PATCH /devices/:id/seen`, `DELETE /devices/:id`
-- Status codes: 200, 201, 204, 400, 401, 404, 409, 413, 429, 500.
+- Status codes: 200, 201, 204, 400, 401, 403 (only `reauth_required`), 404, 409 (incl. `limit_reached`), 413, 429, 500, 504 (`timeout`).
 
 Route conventions:
 - Lists wrap the array (`{ vehicles: [...] }`). Deleted, missing and foreign rows all give `404`: `.eq('id', id).is('deleted_at', null).maybeSingle()`, and null data → `notFound()`.
@@ -126,10 +130,10 @@ Body: `{ lastSyncedAt | null, changes: { vehicles[], documents[] } }`. Rows are 
 - `lib/reminders.ts`: `rebuildReminders(client, doc)` → RPC with `[doc.id]`; `rebuildAllReminders(client)` → RPC for all live docs; `remindersChanged(before, after)` is the pure change check. RPC errors → `dbError`.
 - Daily cron `0 2 * * *` (07:30 Colombo, today from `scheduledTime`) in `cron/send-reminders.ts`, via `ctx.waitUntil`; service-role client, not an HTTP route. **At-most-once**: claim → send → finish, so a re-run or crash never resends.
 - Send-time decisions (`planDelivery` in `lib/reminder-message.ts`, pure): `skipped` with `document_deleted` (doc or vehicle), `push_off`/`email_off` (profile or doc), `no_email`, `no_devices`, `superseded` (several due rows per doc + channel: only the smallest days_before is sent).
-- Push (`lib/push.ts`): Expo, ≤ 100 messages per request, to **all** the user's devices; sent if any ticket is ok. `DeviceNotRegistered` tokens are deleted. Push receipts are not checked (out of scope).
+- Push (`lib/push.ts`): **one push per user** per run (all due docs: `… and 2 more`; `data.documentId` only for a single doc), Expo, ≤ 100 messages per request, to **all** the user's devices; sent if any ticket is ok. `DeviceNotRegistered` tokens are deleted. Push receipts are not checked (out of scope).
 - Email (`lib/email.ts`): one per user to `reminder_email`, HTML (user text escaped) + text, via Resend `/emails/batch`; a 400/422 batch is retried one by one so a bad address fails only its user.
 - Stored errors are codes only (`expo_<code|status>`, `resend_<status>`), never provider text, tokens or emails. Logs: one JSON summary line of counts.
-- Workers Free: `SUBREQUEST_BUDGET = 45` per run (~5 per batch of ~100 rows). Rows beyond it are released or left `scheduled` for the next run.
+- Workers Free: `SUBREQUEST_BUDGET = 45` per run (~5 per batch of `BATCH_SIZE = 50` users; a user costs ≤ 10 pushes + 1 email however many rows are due). Rows beyond it are released or left `scheduled` for the next run.
 - Message: `Insurance · CAB-1234 expires in 5 days (24 Oct 2026)`; also `in 1 day`, `today`, `expired`.
 
 ## Hono conventions
@@ -160,7 +164,8 @@ Body: `{ lastSyncedAt | null, changes: { vehicles[], documents[] } }`. Rows are 
 3. Fill in `env.production.vars` in `wrangler.jsonc` (`SUPABASE_URL`, `SUPABASE_JWKS_URL`, `SUPABASE_JWT_ISSUER`, `EMAIL_FROM` on a verified Resend domain).
 4. `npx wrangler secret put <NAME> --env production` for the 4 secrets (the user types the values).
 5. `npm run deploy:prod`, then check `/v1/health` = 200, `BASE_URL=<prod url> npm run smoke` with a prod test user, and the cron trigger in the Cloudflare dashboard.
-6. On the Workers Paid plan, raise `SUBREQUEST_BUDGET` (`cron/send-reminders.ts`) to ~900.
+6. Supabase Auth: JWT expiry ≤ 1 h (tokens aren't revocable), leaked password protection on. Cloudflare: a WAF rate-limit rule by IP for `/v1/*` (the binding limits are per user, after auth).
+7. On the Workers Paid plan, raise `SUBREQUEST_BUDGET` (`cron/send-reminders.ts`) to ~900.
 
 ## Out of scope (v1)
 

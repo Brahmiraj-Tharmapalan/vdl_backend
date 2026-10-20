@@ -68,10 +68,19 @@ export function setupCronFakes(): CronFakes {
   }
 
   const claim = (body: { p_today: string; p_limit: number }) => {
-    const due = fakes.reminders
-      .filter((r) => r.status === 'scheduled' && r.send_on <= body.p_today)
-      .sort((a, b) => (a.user_id + a.id < b.user_id + b.id ? -1 : 1))
-    const users = new Set(due.slice(0, body.p_limit).map((r) => r.user_id))
+    // Like the SQL: p_limit users, oldest due send_on first (the SQL breaks ties by a daily hash).
+    const due = fakes.reminders.filter((r) => r.status === 'scheduled' && r.send_on <= body.p_today)
+    const oldest = new Map<string, string>()
+    for (const r of due) {
+      const seen = oldest.get(r.user_id)
+      if (!seen || r.send_on < seen) oldest.set(r.user_id, r.send_on)
+    }
+    const users = new Set(
+      [...oldest]
+        .sort(([ua, a], [ub, b]) => (a === b ? (ua < ub ? -1 : 1) : a < b ? -1 : 1))
+        .slice(0, body.p_limit)
+        .map(([u]) => u),
+    )
     const claimed = due.filter((r) => users.has(r.user_id))
     for (const r of claimed) r.status = 'sending'
     return claimed.map(({ status: _s, error: _e, sent_at: _t, ...row }) => row)

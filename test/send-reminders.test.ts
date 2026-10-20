@@ -165,6 +165,21 @@ describe('sendReminders', () => {
     expect(f.status(older.id)).toEqual({ status: 'skipped', error: 'superseded' })
   })
 
+  it('sends one push per device for a user with many due documents', async () => {
+    const rows = Array.from({ length: 30 }, () => reminder())
+    f.reminders.push(...rows)
+    f.devices.push(
+      { user_id: USER_A, push_token: 'ExponentPushToken[a1]' },
+      { user_id: USER_A, push_token: 'ExponentPushToken[a2]' },
+    )
+
+    await sendReminders(f.env, RUN_AT)
+
+    expect(pushed()).toHaveLength(2)
+    expect(pushed()[0]).toMatchObject({ body: expect.stringMatching(/ and 29 more$/), data: {} })
+    for (const r of rows) expect(f.status(r.id).status).toBe('sent')
+  })
+
   it('uses Colombo "today", not UTC', async () => {
     // 19:00 UTC on the 19th is already 00:30 on the 20th in Colombo.
     f.reminders.push(reminder({ send_on: '2026-10-20' }))

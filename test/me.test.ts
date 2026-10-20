@@ -146,6 +146,20 @@ describe('PATCH /v1/me', () => {
     const res = await patch({ displayName: 'x'.repeat(101 * 1024) })
     await expectError(res, 413, 'payload_too_large')
   })
+
+  it('accepts the sign-in email (any case) or null as reminderEmail', async () => {
+    h.supabase(() => Response.json([profile()]))
+    expect((await patch({ reminderEmail: '1111@EXAMPLE.com' })).status).toBe(200)
+    expect((await patch({ reminderEmail: null })).status).toBe(200)
+  })
+
+  it('rejects a reminderEmail other than the sign-in email, without writing', async () => {
+    const res = await patch({ reminderEmail: 'someone-else@example.com' })
+    const body = await expectError(res, 400, 'validation_failed')
+    expect(JSON.stringify(body)).toContain('reminderEmail')
+    expect(JSON.stringify(body)).not.toContain('someone-else')
+    expect(h.calls).toHaveLength(0)
+  })
 })
 
 describe('DELETE /v1/me', () => {
@@ -158,6 +172,15 @@ describe('DELETE /v1/me', () => {
     expect(call?.method).toBe('DELETE')
     expect(call?.url.href).toBe(`${env.SUPABASE_URL}/auth/v1/admin/users/${USER_A}`)
     expect(call?.authorization).toBe('Bearer test-service-key')
+  })
+
+  it.each([
+    ['a sign-in older than 10 minutes', { amr: [{ method: 'oauth', timestamp: Math.floor(Date.now() / 1000) - 11 * 60 }] }],
+    ['no amr claim', { amr: undefined }],
+  ])('returns 403 reauth_required without deleting for %s', async (_name, claims) => {
+    const res = await h.authed('/v1/me', { method: 'DELETE' }, USER_A, claims)
+    await expectError(res, 403, 'reauth_required')
+    expect(h.calls).toHaveLength(0)
   })
 
   it('uses the strict rate limit', async () => {

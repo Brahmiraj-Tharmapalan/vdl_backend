@@ -67,6 +67,9 @@ const originalTheme = me?.theme ?? 'system'
 const patched = await expect('PATCH /me theme', 'PATCH', '/v1/me', 200, { theme: 'dark' })
 check('me.theme = dark', patched?.theme === 'dark')
 await expect('PATCH /me unknown field → 400', 'PATCH', '/v1/me', 400, { userId: 'x' })
+await expect('PATCH /me foreign reminderEmail → 400', 'PATCH', '/v1/me', 400, {
+  reminderEmail: 'not-the-account@example.com',
+})
 
 // --- Vehicles ---
 const v1 = randomUUID()
@@ -194,6 +197,10 @@ const device = await expect('POST /devices', 'POST', '/v1/devices', 200, {
   deviceName: 'Smoke device',
 })
 check('device has no push token in response', device && !('pushToken' in device))
+await expect('POST /devices non-Expo token → 400', 'POST', '/v1/devices', 400, {
+  pushToken: 'not-an-expo-token',
+  platform: 'android',
+})
 const dlist = await expect('GET /devices', 'GET', '/v1/devices', 200)
 check('device listed', ids(dlist?.devices).includes(device?.id))
 await expect('PATCH /devices/:id/seen', 'PATCH', `/v1/devices/${device?.id}/seen`, 200)

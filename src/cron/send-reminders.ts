@@ -19,14 +19,18 @@ import {
   planDelivery,
   toFinishPayload,
   type DueReminder,
+  type PushItem,
   type ReminderResult,
 } from '../lib/reminder-message'
 import { serviceClient } from '../lib/supabase'
 
 /** Workers Free allows 50 subrequests per cron run; keep a margin. Raise on the Paid plan. */
 export const SUBREQUEST_BUDGET = 45
-/** Rows per claim (whole users, so a batch can be slightly larger). */
-export const BATCH_SIZE = 100
+/**
+ * Users per claim. Each user costs one push per device (≤ 10, capped in register_device) and one email, however
+ * many reminders are due, so a batch stays at about one Expo and one Resend request.
+ */
+export const BATCH_SIZE = 50
 /** claim + devices + push + email + finish */
 const MIN_BATCH_COST = 5
 
@@ -169,22 +173,23 @@ async function deliverBatch(
 async function deliverPush(
   db: Db,
   env: CronEnv,
-  items: ReturnType<typeof planDelivery>['push'],
+  items: PushItem[],
   budget: Budget,
   summary: RunSummary,
 ): Promise<ReminderResult[]> {
   if (items.length === 0) return []
-  const release = (): ReminderResult[] => items.map((i) => ({ id: i.reminderId, status: 'scheduled' }))
+  const each = (item: PushItem, status: ReminderResult['status'], error?: string): ReminderResult[] =>
+    item.reminderIds.map((id) => (error === undefined ? { id, status } : { id, status, error }))
 
-  if (!budget.take()) return release()
-  const userIds = [...new Set(items.map((i) => i.userId))]
+  if (!budget.take()) return items.flatMap((i) => each(i, 'scheduled'))
+  const userIds = items.map((i) => i.userId)
   const { data: devices, error } = await db
     .from('devices')
     .select('user_id, push_token')
     .in('user_id', userIds)
   if (error) {
     logError('devices', error.code)
-    return items.map((i) => ({ id: i.reminderId, status: 'failed', error: 'devices_error' }))
+    return items.flatMap((i) => each(i, 'failed', 'devices_error'))
   }
 
   const tokensByUser = new Map<string, string[]>()
@@ -195,29 +200,29 @@ async function deliverPush(
   }
 
   const results: ReminderResult[] = []
-  const outgoing: { reminderId: string; message: PushMessage }[] = []
+  const outgoing: { item: PushItem; message: PushMessage }[] = []
   for (const item of items) {
     const tokens = tokensByUser.get(item.userId) ?? []
     if (tokens.length === 0) {
-      results.push({ id: item.reminderId, status: 'skipped', error: 'no_devices' })
+      results.push(...each(item, 'skipped', 'no_devices'))
       continue
     }
     for (const to of tokens) {
       outgoing.push({
-        reminderId: item.reminderId,
+        item,
         message: {
           to,
           title: PUSH_TITLE,
           body: item.body,
           sound: 'default',
-          data: { documentId: item.documentId },
+          data: item.documentId ? { documentId: item.documentId } : {},
         },
       })
     }
   }
 
-  // Outcomes per reminder across all its devices; undefined = not attempted (budget).
-  const outcomes = new Map<string, PushOutcome[]>()
+  // Outcomes per push item across all its devices; undefined = not attempted (budget).
+  const outcomes = new Map<PushItem, PushOutcome[]>()
   const deadTokens = new Set<string>()
   for (const part of chunk(outgoing, EXPO_CHUNK_SIZE)) {
     if (!budget.take()) break
@@ -228,21 +233,21 @@ async function deliverPush(
     part.forEach((p, i) => {
       const outcome = sent[i] ?? { ok: false, error: 'expo_bad_response', deviceNotRegistered: false }
       if (!outcome.ok && outcome.deviceNotRegistered) deadTokens.add(p.message.to)
-      const list = outcomes.get(p.reminderId)
+      const list = outcomes.get(p.item)
       if (list) list.push(outcome)
-      else outcomes.set(p.reminderId, [outcome])
+      else outcomes.set(p.item, [outcome])
     })
   }
 
-  for (const reminderId of new Set(outgoing.map((p) => p.reminderId))) {
-    const list = outcomes.get(reminderId)
+  for (const item of new Set(outgoing.map((p) => p.item))) {
+    const list = outcomes.get(item)
     if (!list) {
-      results.push({ id: reminderId, status: 'scheduled' })
+      results.push(...each(item, 'scheduled'))
     } else if (list.some((o) => o.ok)) {
-      results.push({ id: reminderId, status: 'sent' })
+      results.push(...each(item, 'sent'))
     } else {
       const first = list.find((o) => !o.ok)
-      results.push({ id: reminderId, status: 'failed', error: first && !first.ok ? first.error : 'expo_error' })
+      results.push(...each(item, 'failed', first && !first.ok ? first.error : 'expo_error'))
     }
   }
 

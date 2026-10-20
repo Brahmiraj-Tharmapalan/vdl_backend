@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '../types/db'
+import { limitReached } from './errors'
 
 type SupabaseEnv = Pick<
   CloudflareBindings,
@@ -27,10 +28,14 @@ export function serviceClient(
   return createClient<Database>(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth })
 }
 
+/** SQLSTATE raised by the per-user quota triggers (supabase/migrations/*_harden_limits.sql). */
+export const QUOTA_SQLSTATE = 'VDL01'
+
 /**
  * Wraps a Supabase/PostgREST error as a plain Error: `onError` logs it with the request ID
- * and the client only sees a generic 500.
+ * and the client only sees a generic 500. A quota error becomes a 409 `limit_reached`.
  */
 export function dbError(error: { message: string; code?: string }): Error {
+  if (error.code === QUOTA_SQLSTATE) return limitReached()
   return new Error(`Supabase error${error.code ? ` ${error.code}` : ''}: ${error.message}`)
 }

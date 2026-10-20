@@ -6,6 +6,8 @@ export type AuthUser = {
   id: string
   email: string | undefined
   sessionId: string | undefined
+  /** Unix seconds of the latest real sign-in (JWT `amr`), not of the last token refresh. */
+  signedInAt: number | undefined
 }
 
 export type AppEnv = {

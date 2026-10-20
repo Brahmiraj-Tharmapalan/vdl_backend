@@ -13,6 +13,8 @@ const claimsSchema = z.object({
   exp: z.number(),
   email: z.string().optional(),
   session_id: z.string().optional(),
+  // Supabase's sign-in methods with their times. Unlike iat, these survive token refreshes.
+  amr: z.array(z.object({ method: z.string(), timestamp: z.number() })).optional(),
 })
 
 /**
@@ -43,6 +45,9 @@ export const auth = () =>
         id: claims.data.sub,
         email: claims.data.email,
         sessionId: claims.data.session_id,
+        signedInAt: claims.data.amr?.length
+          ? Math.max(...claims.data.amr.map((a) => a.timestamp))
+          : undefined,
       })
       c.set('supabase', userClient(c.env, token))
       await next()

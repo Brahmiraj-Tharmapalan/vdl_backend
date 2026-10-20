@@ -55,7 +55,28 @@ describe('planDelivery', () => {
     const good = strip(reminder({ user_id: '22222222-2222-4222-8222-222222222222' }))
     const plan = planDelivery([bad, good], TODAY)
     expect(plan.results).toEqual([{ id: bad.id, status: 'failed', error: 'render_error' }])
-    expect(plan.push.map((p) => p.reminderId)).toEqual([good.id])
+    expect(plan.push.map((p) => p.reminderIds)).toEqual([[good.id]])
+  })
+
+  it('combines all of a user\'s push rows into one push, soonest expiry first', () => {
+    const later = strip(reminder({ expiry_date: '2026-10-30' }))
+    const sooner = strip(reminder({ doc_type: 'revenue_licence', expiry_date: '2026-10-21' }))
+    const single = strip(reminder({ user_id: '22222222-2222-4222-8222-222222222222' }))
+    const plan = planDelivery([later, sooner, single], TODAY)
+    expect(plan.push).toEqual([
+      {
+        userId: later.user_id,
+        reminderIds: [sooner.id, later.id],
+        documentId: null,
+        body: 'Revenue licence · CAB-1234 expires in 1 day (21 Oct 2026) and 1 more',
+      },
+      {
+        userId: single.user_id,
+        reminderIds: [single.id],
+        documentId: single.document_id,
+        body: 'Insurance · CAB-1234 expires in 5 days (25 Oct 2026)',
+      },
+    ])
   })
 })
 

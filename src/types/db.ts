@@ -320,6 +320,14 @@ export type Database = {
         }
         Returns: Json
       }
+      sync_changes_unchecked: {
+        Args: {
+          p_documents?: Json
+          p_last_synced_at?: string
+          p_vehicles?: Json
+        }
+        Returns: Json
+      }
     }
     Enums: {
       [_ in never]: never
