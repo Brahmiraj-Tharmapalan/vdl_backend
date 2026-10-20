@@ -43,6 +43,26 @@ export function toVehicle(row: Tables<'vehicles'>) {
   }
 }
 
+/** What the app shows next to a document or reminder. */
+export function toVehicleSummary(row: Pick<Tables<'vehicles'>, 'nickname' | 'plate_number' | 'type'>) {
+  return {
+    nickname: row.nickname,
+    plateNumber: row.plate_number,
+    type: asEnum(VEHICLE_TYPES, row.type),
+  }
+}
+
+/** What the app shows for a reminder's document. */
+export function toDocumentSummary(
+  row: Pick<Tables<'documents'>, 'type' | 'custom_name' | 'expiry_date'>,
+) {
+  return {
+    type: asEnum(DOCUMENT_TYPES, row.type),
+    customName: row.custom_name,
+    expiryDate: row.expiry_date,
+  }
+}
+
 /** `today` comes from `todayInColombo()`; status is computed, never stored. */
 export function toDocument(row: Tables<'documents'>, today: IsoDate) {
   return {
@@ -86,6 +106,7 @@ export function toDevice(row: Tables<'devices'>) {
 
 export type ProfileDto = ReturnType<typeof toProfile>
 export type VehicleDto = ReturnType<typeof toVehicle>
+export type VehicleSummaryDto = ReturnType<typeof toVehicleSummary>
 export type DocumentDto = ReturnType<typeof toDocument>
 export type ReminderDto = ReturnType<typeof toReminder>
 export type DeviceDto = ReturnType<typeof toDevice>

@@ -9,9 +9,11 @@ import { errorBody, toErrorResponse } from './lib/errors'
 import { auth } from './middleware/auth'
 import { logger } from './middleware/logger'
 import { rateLimit } from './middleware/rate-limit'
+import dashboard from './routes/dashboard'
 import devices from './routes/devices'
 import documents from './routes/documents'
 import me from './routes/me'
+import reminders from './routes/reminders'
 import vehicles from './routes/vehicles'
 
 const KB = 1024
@@ -34,6 +36,8 @@ app.route('/v1/me', me)
 app.route('/v1/devices', devices)
 app.route('/v1/vehicles', vehicles)
 app.route('/v1/documents', documents)
+app.route('/v1/dashboard', dashboard)
+app.route('/v1/reminders', reminders)
 
 app.onError((err, c) => {
   const requestId = c.var.requestId ?? 'unknown'

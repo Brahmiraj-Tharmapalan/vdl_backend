@@ -27,7 +27,7 @@ src/
   env.ts        # AppEnv = { Bindings, Variables: { user, supabase, requestId } }
   middleware/   # auth, rate-limit, logger
   routes/       # me, dashboard, vehicles, documents, reminders, sync, devices
-  lib/          # supabase, errors, validator, status, dates, mappers, reminders, push, email
+  lib/          # supabase, errors, validator, status, dates, mappers, reminders, dashboard, push, email
   cron/         # send-reminders.ts
   schemas/      # zod schemas (json, query, params); shared primitives in common.ts
   types/db.ts   # generated, never edit by hand
@@ -87,10 +87,11 @@ Rules:
 
 - `GET /health` (public)
 - `GET | PATCH | DELETE /me`: profile + settings. DELETE removes the auth user, and the FKs cascade to all data.
-- `GET /dashboard`: counts (vehicles, documents, toRenew) + top 5 upcoming
+- `GET /dashboard`: `{ counts: { vehicles, documents, toRenew }, upcoming }`. Only live docs on live vehicles count. `upcoming` = 5 soonest `expiry_date` (expired first; ties by created_at, id), each `toDocument` + `vehicle` summary. Logic in `lib/dashboard.ts`.
 - `GET | POST /vehicles`, `GET | PATCH | DELETE /vehicles/:id`
 - `GET /documents?filter=all|to_renew|valid`, `POST /vehicles/:id/documents`, `GET | PATCH | DELETE /documents/:id` (PATCH with a new expiryDate = Renew)
-- `GET /reminders/upcoming` · `POST /sync`
+- `GET /reminders/upcoming?limit=1..100` (default 50): `scheduled`, `send_on >= today`, live doc + vehicle (embedded `!inner` select), by send_on, id. Each `toReminder` + `document` + `vehicle` summary.
+- `POST /sync`
 - `GET | POST /devices`, `PATCH /devices/:id/seen`, `DELETE /devices/:id`
 - Status codes: 200, 201, 204, 400, 401, 404, 409, 413, 429, 500.
 
