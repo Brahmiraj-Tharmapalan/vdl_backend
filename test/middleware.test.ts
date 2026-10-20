@@ -9,7 +9,6 @@ app.get('/v1/__test/boom', () => {
   throw new Error('relation "vehicles" secret SQL detail')
 })
 app.post('/v1/__test/echo', async (c) => c.json({ size: (await c.req.text()).length }))
-app.post('/v1/sync', async (c) => c.json({ size: (await c.req.text()).length }))
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 
@@ -35,6 +34,7 @@ const testEnv = (): CloudflareBindings => ({
   SUPABASE_ANON_KEY: 'test-anon-key',
   SUPABASE_SERVICE_ROLE_KEY: 'test-service-key',
   RATE_LIMITER: { limit },
+  STRICT_RATE_LIMITER: { limit },
 })
 
 const call = (path: string, init: RequestInit = {}) =>
@@ -169,7 +169,8 @@ describe('body limit', () => {
       body: big,
       ...bearer(await signJwt(es, claims())),
     })
-    expect(res.status).toBe(200)
+    // Past the body limit: the sync route's validator rejects the non-JSON body.
+    await expectError(res, 400, 'validation_failed')
   })
 
   it('rejects bodies over 1 MB on /v1/sync', async () => {

@@ -27,11 +27,11 @@ src/
   env.ts        # AppEnv = { Bindings, Variables: { user, supabase, requestId } }
   middleware/   # auth, rate-limit, logger
   routes/       # me, dashboard, vehicles, documents, reminders, sync, devices
-  lib/          # supabase, errors, validator, status, dates, mappers, reminders, dashboard, push, email
+  lib/          # supabase, errors, validator, status, dates, mappers, reminders, dashboard, sync, push, email
   cron/         # send-reminders.ts
   schemas/      # zod schemas (json, query, params); shared primitives in common.ts
   types/db.ts   # generated, never edit by hand
-supabase/migrations  # source of truth for the DB schema
+supabase/migrations  # source of truth for the DB schema (supabase/tests: SQL smoke tests)
 test/helpers/        # test JWT/JWKS signing, Supabase fetch stub, setupHarness()
 ```
 
@@ -51,15 +51,17 @@ test/helpers/        # test JWT/JWKS signing, Supabase fetch stub, setupHarness(
 ## Database (Supabase)
 
 - `profiles`: id (= auth user), display_name, reminder_email, push_enabled, email_enabled, default_reminder_days int[], theme, last_synced_at
-- `vehicles`: id, user_id, nickname, plate_number, type (car | motorbike | three_wheeler | van), deleted_at
-- `documents`: id, user_id, vehicle_id, type (revenue_licence | insurance | emission_test | registration | custom), custom_name, expiry_date, reminder_days int[], push_enabled, email_enabled, deleted_at
+- `vehicles`: id, user_id, nickname, plate_number, type (car | motorbike | three_wheeler | van), client_updated_at, deleted_at
+- `documents`: id, user_id, vehicle_id, type (revenue_licence | insurance | emission_test | registration | custom), custom_name, expiry_date, reminder_days int[], push_enabled, email_enabled, client_updated_at, deleted_at
 - `reminders`: id, user_id, document_id, days_before, send_on, channel (push | email), status (scheduled | sent | failed | skipped), sent_at, error; unique (document_id, days_before, channel, send_on), so a Renew gets fresh rows while sent history stays
 - `devices`: id, user_id, push_token unique, platform (ios | android), device_name, last_seen_at
 - All tables have `created_at` + `updated_at`. A trigger always sets `updated_at = now()`, so it is the trusted sync cursor.
+- `client_updated_at` (vehicles, documents) is the client's `updatedAt`, used only for last-write-wins and never exposed. Sync sets it. An update that leaves it unchanged (every REST write) gets `now()` from a trigger.
 
 RPCs (`security definer`):
 - `register_device(p_push_token, p_platform, p_device_name)`: upserts a device by push token for `auth.uid()`, taking it over from another account. Used by `POST /v1/devices`.
 - `rebuild_reminders(p_document_ids uuid[] default null)`: for the caller's docs (null = all live ones; foreign/missing ids skipped) deletes `scheduled` rows, then inserts the new ones with Colombo "today" and `on conflict do nothing`. Used by `lib/reminders.ts`.
+- `sync_changes(p_last_synced_at default null, p_vehicles jsonb, p_documents jsonb)`: the whole sync push + pull in one transaction (see Sync). It bypasses RLS, so every statement filters by `auth.uid()`. Smoke test: `npx supabase db query --linked --yes -f supabase/tests/sync_smoke.sql` (rolled back).
 
 Rules:
 - RLS on every table: `user_id = (select auth.uid())` for using + with check (`id` for profiles). Users may only select `reminders`.
@@ -91,7 +93,7 @@ Rules:
 - `GET | POST /vehicles`, `GET | PATCH | DELETE /vehicles/:id`
 - `GET /documents?filter=all|to_renew|valid`, `POST /vehicles/:id/documents`, `GET | PATCH | DELETE /documents/:id` (PATCH with a new expiryDate = Renew)
 - `GET /reminders/upcoming?limit=1..100` (default 50): `scheduled`, `send_on >= today`, live doc + vehicle (embedded `!inner` select), by send_on, id. Each `toReminder` + `document` + `vehicle` summary.
-- `POST /sync`
+- `POST /sync`: see Sync
 - `GET | POST /devices`, `PATCH /devices/:id/seen`, `DELETE /devices/:id`
 - Status codes: 200, 201, 204, 400, 401, 404, 409, 413, 429, 500.
 
@@ -104,12 +106,14 @@ Route conventions:
 
 ## Sync (`POST /v1/sync`)
 
-Body: `{ lastSyncedAt | null, changes: { vehicles[], documents[] } }`.
-1. Validate. Cap rows (≤ 500). Reject `updatedAt` more than 5 min in the future.
-2. Upsert vehicles, then documents, by `id`. Last write wins on `updatedAt`.
-3. Set `user_id` server-side. Reject ids owned by another user. vehicleId must be the user's.
-4. Rebuild reminders for changed documents.
-5. Return rows (including soft-deleted) with `updated_at > lastSyncedAt`, plus `serverTime`. Save `last_synced_at`.
+Body: `{ lastSyncedAt | null, changes: { vehicles[], documents[] } }`. Rows are full local representations with `updatedAt` and `deletedAt`. Response: `{ serverTime, vehicles, documents, rejected }`.
+1. zod (`schemas/sync.ts`): ≤ 500 rows per array, unique ids, `updatedAt`/`deletedAt` ≤ 5 min in the future, else `400`.
+2. One `sync_changes` RPC call does the rest atomically, vehicles before documents. `user_id` comes from `auth.uid()`.
+3. Merge: last write wins on `client_updated_at`, and a **delete always wins**. A server-deleted row never changes again. `shouldApply()` in `lib/sync.ts` is the TS mirror; change both together.
+4. Per-row `rejected: [{ entity, id, reason }]`, never a 409: `id_in_use` (another account's id) or `vehicle_not_found` (the doc's vehicle isn't the user's, or is deleted while the doc is live).
+5. A vehicle deleted via sync soft-deletes its live docs (same `deleted_at`). Reminders are rebuilt for all changed docs. `last_synced_at = now()`.
+6. Pull: rows (soft-deleted included) with `updated_at > lastSyncedAt` (null = all), plus every pushed non-rejected id, so a losing edit gets the winner back.
+7. `serverTime` = the next `lastSyncedAt` = `now() - 60 s`, so a concurrent transaction that commits later can't be missed. Re-delivery is idempotent.
 
 ## Reminders
 

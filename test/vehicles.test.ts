@@ -29,6 +29,7 @@ const vehicle = (over: Partial<Tables<'vehicles'>> = {}): Tables<'vehicles'> => 
   type: 'car',
   created_at: '2026-10-19T00:00:00+00:00',
   updated_at: '2026-10-20T00:00:00+00:00',
+  client_updated_at: '2026-10-20T00:00:00+00:00',
   deleted_at: null,
   ...over,
 })
@@ -45,6 +46,7 @@ const doc = (over: Partial<Tables<'documents'>> = {}): Tables<'documents'> => ({
   email_enabled: true,
   created_at: '2026-10-19T00:00:00+00:00',
   updated_at: '2026-10-20T00:00:00+00:00',
+  client_updated_at: '2026-10-20T00:00:00+00:00',
   deleted_at: null,
   ...over,
 })

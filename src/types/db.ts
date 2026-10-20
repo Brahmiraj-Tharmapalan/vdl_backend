@@ -74,6 +74,7 @@ export type Database = {
       }
       documents: {
         Row: {
+          client_updated_at: string
           created_at: string
           custom_name: string | null
           deleted_at: string | null
@@ -88,6 +89,7 @@ export type Database = {
           vehicle_id: string
         }
         Insert: {
+          client_updated_at?: string
           created_at?: string
           custom_name?: string | null
           deleted_at?: string | null
@@ -102,6 +104,7 @@ export type Database = {
           vehicle_id: string
         }
         Update: {
+          client_updated_at?: string
           created_at?: string
           custom_name?: string | null
           deleted_at?: string | null
@@ -216,6 +219,7 @@ export type Database = {
       }
       vehicles: {
         Row: {
+          client_updated_at: string
           created_at: string
           deleted_at: string | null
           id: string
@@ -226,6 +230,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          client_updated_at?: string
           created_at?: string
           deleted_at?: string | null
           id: string
@@ -236,6 +241,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          client_updated_at?: string
           created_at?: string
           deleted_at?: string | null
           id?: string
@@ -278,6 +284,14 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      sync_changes: {
+        Args: {
+          p_documents?: Json
+          p_last_synced_at?: string
+          p_vehicles?: Json
+        }
+        Returns: Json
       }
     }
     Enums: {

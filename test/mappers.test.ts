@@ -17,6 +17,7 @@ const documentRow: Tables<'documents'> = {
   email_enabled: false,
   created_at: TS,
   updated_at: TS,
+  client_updated_at: TS,
   deleted_at: null,
 }
 
@@ -50,6 +51,7 @@ describe('mappers', () => {
       type: 'car',
       created_at: TS,
       updated_at: TS,
+      client_updated_at: TS,
       deleted_at: null,
     })
     expect(dto).toEqual({

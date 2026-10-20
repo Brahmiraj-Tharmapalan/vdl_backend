@@ -14,6 +14,7 @@ import devices from './routes/devices'
 import documents from './routes/documents'
 import me from './routes/me'
 import reminders from './routes/reminders'
+import sync from './routes/sync'
 import vehicles from './routes/vehicles'
 
 const KB = 1024
@@ -38,6 +39,7 @@ app.route('/v1/vehicles', vehicles)
 app.route('/v1/documents', documents)
 app.route('/v1/dashboard', dashboard)
 app.route('/v1/reminders', reminders)
+app.route('/v1/sync', sync)
 
 app.onError((err, c) => {
   const requestId = c.var.requestId ?? 'unknown'
