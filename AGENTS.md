@@ -128,6 +128,15 @@ DB rules:
 
 Status codes: 200, 201, 204, 400, 401, 404, 409, 413, 429, 500.
 
+Route conventions:
+- Lists wrap the array: `{ vehicles: [...] }`, `{ documents: [...] }`, `{ devices: [...] }`. Lists and `/:id` routes filter `deleted_at is null`; deleted, missing and foreign rows all give `404`.
+- "Not mine → 404": `.update/.delete/.select(...).eq('id', id).is('deleted_at', null).maybeSingle()`; null data → `notFound()`.
+- **Client-id upsert** (`POST /vehicles`, `POST /vehicles/:id/documents`): insert with `upsert(row, { onConflict: 'id', ignoreDuplicates: true })` (on conflict do nothing, which only checks the INSERT policy) → `201`; if nothing comes back, update the user's own live row by `id` (documents also need `vehicle_id = :id`) → `200`; if that matches nothing too, the id is another account's or the user's soft-deleted row → `409 conflict` "This id is already in use" (same message for both, so the owner never leaks). POST is a full representation: omitted optional fields reset to defaults (nickname → null, reminderDays → profile `default_reminder_days`, toggles → true).
+- `POST /vehicles/:id/documents`: the vehicle must be the user's and live, else `404`.
+- `customName` is required iff `type = custom`. PATCH checks this on the merged row (400 `validation_failed`, path `customName`); switching `type` away from `custom` clears `custom_name`.
+- `DELETE /vehicles/:id`: check the vehicle is live (else 404), soft-delete its live documents (rebuilding reminders for each), then the vehicle, with one `deleted_at`. Documents go first so a retry never leaves live documents under a deleted vehicle.
+- Document PATCH calls `rebuildReminders()` only when `remindersChanged(old, new)` (expiry, reminder days, push/email toggles, deleted_at); create, upsert-update and delete always call it.
+
 ## Sync (`POST /v1/sync`)
 
 Body: `{ lastSyncedAt | null, changes: { vehicles[], documents[] } }`.
@@ -139,6 +148,7 @@ Body: `{ lastSyncedAt | null, changes: { vehicles[], documents[] } }`.
 
 ## Reminders
 
+- `lib/reminders.ts`: `rebuildReminders(client, doc)` is currently a **no-op stub** (P6 fills it via a `security definer` RPC, since users can only select `reminders`); `remindersChanged(before, after)` is the pure change check.
 - `rebuildReminders(doc)`: delete its `scheduled` rows; if not deleted, create one row per (days, enabled channel) with `send_on = expiry_date - days`, skipping dates before today.
 - Daily cron `0 2 * * *` (07:30 Colombo), service-role client, not an HTTP route:
   - pick `status = 'scheduled' and send_on <= today`; deleted docs → `skipped`
@@ -164,6 +174,7 @@ Body: `{ lastSyncedAt | null, changes: { vehicles[], documents[] } }`.
 ## Testing requirements
 
 - Tests never hit the live Supabase project or real JWKS: sign tokens with the local keys and stub Supabase using the helpers in `test/helpers/`.
+- Route tests use `setupHarness()` from `test/helpers/api.ts`; spy on `rebuildReminders` with `vi.mock('../src/lib/reminders', ...)` keeping the real exports via `importOriginal`.
 - Unit: status, dates (Colombo vs UTC midnight, month ends), rebuildReminders.
 - Auth: missing/expired/wrong-issuer/wrong-alg token → 401.
 - Isolation: user B gets 404 on user A's vehicles, documents and devices.

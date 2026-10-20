@@ -10,7 +10,9 @@ import { auth } from './middleware/auth'
 import { logger } from './middleware/logger'
 import { rateLimit } from './middleware/rate-limit'
 import devices from './routes/devices'
+import documents from './routes/documents'
 import me from './routes/me'
+import vehicles from './routes/vehicles'
 
 const KB = 1024
 const PUBLIC_PATHS = ['/v1/health']
@@ -30,6 +32,8 @@ app.use(except(PUBLIC_PATHS, rateLimit))
 app.get('/v1/health', (c) => c.json({ status: 'ok' }))
 app.route('/v1/me', me)
 app.route('/v1/devices', devices)
+app.route('/v1/vehicles', vehicles)
+app.route('/v1/documents', documents)
 
 app.onError((err, c) => {
   const requestId = c.var.requestId ?? 'unknown'
