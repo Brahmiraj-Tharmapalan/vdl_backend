@@ -28,6 +28,8 @@ The app is local-first. Users without an account keep data on the phone (local n
 
 After any change: typecheck, run tests, and hit the changed routes with `npx hono request`.
 
+**Keep this file current.** If a change adds or alters a convention, table, column, RPC, binding, route, command or folder, update the matching section of this file in the same change. This file must always describe the code as it is.
+
 ## Folder structure
 
 ```
@@ -37,12 +39,13 @@ src/
   env.ts            # AppEnv = { Bindings, Variables: { user, supabase, requestId } }
   middleware/       # auth.ts, rate-limit.ts, logger.ts
   routes/           # me, dashboard, vehicles, documents, reminders, sync, devices
-  lib/              # supabase, errors, validator, status, dates, reminders, push, email
+  lib/              # supabase, errors, validator, status, dates, mappers, reminders, push, email
   cron/             # send-reminders.ts
   schemas/          # zod schemas (json, query, params)
   types/db.ts       # generated, never edit by hand
 supabase/migrations # the source of truth for the DB schema
 test/
+  helpers/          # test JWT/JWKS signing, Supabase stubs, request helpers
 ```
 
 ## Core rules (never break these)
@@ -66,7 +69,12 @@ Tables (full SQL in `supabase/migrations/`):
 - `vehicles` — id, user_id, nickname, plate_number, type (car | motorbike | three_wheeler | van), timestamps, deleted_at
 - `documents` — id, user_id, vehicle_id, type (revenue_licence | insurance | emission_test | registration | custom), custom_name, expiry_date, reminder_days int[], push_enabled, email_enabled, timestamps, deleted_at
 - `reminders` — id, user_id, document_id, days_before, send_on, channel (push | email), status (scheduled | sent | failed | skipped), sent_at, error; unique (document_id, days_before, channel)
-- `devices` — id, user_id, push_token unique, platform, device_name, last_seen_at
+- `devices` — id, user_id, push_token unique, platform (ios | android), device_name, last_seen_at
+
+All tables have `created_at` + `updated_at`. A trigger always sets `updated_at = now()` (server time), so it is the trusted sync cursor.
+
+RPCs (`security definer` functions):
+- `register_device(p_push_token, p_platform, p_device_name)` — upserts a device by push token for `auth.uid()`, taking it over from another account (a phone that switched users). Used by `POST /v1/devices`.
 
 DB rules:
 - RLS on every table: `user_id = (select auth.uid())` for using + with check (`id` for profiles).
@@ -74,6 +82,8 @@ DB rules:
 - Users may only select `reminders`; writes go through code.
 - Add length/enum `check` constraints matching the zod schemas.
 - Trigger: create `profiles` row on `auth.users` insert (`security definer`, `set search_path = ''`).
+- When RLS blocks a write a route needs (e.g. a row owned by another user, or a table users can't write), add a `security definer` RPC instead of using the service-role client. It must `set search_path = ''`, take the user only from `auth.uid()` (never a parameter), and `revoke execute ... from public, anon` then `grant execute ... to authenticated`.
+- A migration is applied with `npx supabase db push`, then regenerate `src/types/db.ts`.
 - Run Supabase Security Advisor after every migration.
 
 ## Middleware order (`src/app.ts`)
@@ -81,7 +91,7 @@ DB rules:
 1. `requestId()` → 2. logger (JSON, no PII) → 3. `secureHeaders()` → 4. `bodyLimit` 100 KB (`/v1/sync` 1 MB) → 5. `timeout(10_000)` → 6. `auth` → 7. `rateLimit` → 8. routes with `validate()` → 9. `app.onError` + `app.notFound`.
 
 - No CORS (mobile only). No CSRF middleware (Bearer tokens, no cookies).
-- `/health` is the only public route.
+- `/health` is the only public route. Auth runs before `notFound`, so an unknown path without a valid token gets `401`, not `404` (no route probing).
 
 ## Auth (`middleware/auth.ts`)
 
@@ -94,14 +104,16 @@ DB rules:
 
 - Every json/query/param input goes through `validate()` (zod wrapper in `lib/validator.ts`). Read input with `c.req.valid(...)`, never `c.req.json()`.
 - Schemas use `.strict()` and limits: nickname/customName ≤ 50, plate ≤ 15 (trim + uppercase, `^[A-Z0-9 -]+$`), reminderDays ≤ 6 items in 1..365, `:id` is UUID, dates are `YYYY-MM-DD`.
-- Error shape: `{ "error": { "code", "message", "requestId" } }`. Throw `HTTPException` for expected errors.
+- Error shape: `{ "error": { "code", "message", "requestId" } }`. Validation failures (`code: "validation_failed"`, 400) also have `details: [{ path, message }]`, never the input values.
+- For expected errors throw the helpers in `lib/errors.ts` (`notFound()`, `badRequest()`, `conflict()`, ... — `ApiError` extends `HTTPException`). `app.onError` maps everything through `toErrorResponse()`.
+- Supabase errors: `throw dbError(error)` (`lib/supabase.ts`). The client gets a generic 500; the message is logged server-side.
 - Never send stack traces, SQL or Supabase messages to clients. Log them server-side with the request ID.
 - Never log tokens, Authorization headers, bodies, emails, plate numbers or push tokens.
 
 ## Rate limiting
 
 - `RATE_LIMITER` binding, keyed by user ID (not IP): 100/min.
-- Stricter binding (10/min) for `/v1/sync`, `POST /v1/devices`, `DELETE /v1/me`.
+- `STRICT_RATE_LIMITER` binding (10/min) for `/v1/sync`, `POST /v1/devices`, `DELETE /v1/me`: add `strictRateLimit` from `middleware/rate-limit.ts` to those routes.
 
 ## API (`/v1`, all behind auth)
 
@@ -151,6 +163,7 @@ Body: `{ lastSyncedAt | null, changes: { vehicles[], documents[] } }`.
 
 ## Testing requirements
 
+- Tests never hit the live Supabase project or real JWKS: sign tokens with the local keys and stub Supabase using the helpers in `test/helpers/`.
 - Unit: status, dates (Colombo vs UTC midnight, month ends), rebuildReminders.
 - Auth: missing/expired/wrong-issuer/wrong-alg token → 401.
 - Isolation: user B gets 404 on user A's vehicles, documents and devices.

@@ -26,3 +26,11 @@ export function serviceClient(
 ): SupabaseClient<Database> {
   return createClient<Database>(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth })
 }
+
+/**
+ * Wraps a Supabase/PostgREST error as a plain Error: `onError` logs it with the request ID
+ * and the client only sees a generic 500.
+ */
+export function dbError(error: { message: string; code?: string }): Error {
+  return new Error(`Supabase error${error.code ? ` ${error.code}` : ''}: ${error.message}`)
+}

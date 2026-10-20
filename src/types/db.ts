@@ -252,7 +252,29 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      register_device: {
+        Args: {
+          p_device_name?: string
+          p_platform: string
+          p_push_token: string
+        }
+        Returns: {
+          created_at: string
+          device_name: string | null
+          id: string
+          last_seen_at: string
+          platform: string
+          push_token: string
+          updated_at: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "devices"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
     }
     Enums: {
       [_ in never]: never

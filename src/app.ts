@@ -9,6 +9,8 @@ import { errorBody, toErrorResponse } from './lib/errors'
 import { auth } from './middleware/auth'
 import { logger } from './middleware/logger'
 import { rateLimit } from './middleware/rate-limit'
+import devices from './routes/devices'
+import me from './routes/me'
 
 const KB = 1024
 const PUBLIC_PATHS = ['/v1/health']
@@ -26,6 +28,8 @@ app.use(except(PUBLIC_PATHS, auth()))
 app.use(except(PUBLIC_PATHS, rateLimit))
 
 app.get('/v1/health', (c) => c.json({ status: 'ok' }))
+app.route('/v1/me', me)
+app.route('/v1/devices', devices)
 
 app.onError((err, c) => {
   const requestId = c.var.requestId ?? 'unknown'
