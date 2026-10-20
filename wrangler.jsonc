@@ -18,7 +18,7 @@
     "SUPABASE_URL": "https://bauswallqyrtmngsvpxc.supabase.co",
     "SUPABASE_JWKS_URL": "https://bauswallqyrtmngsvpxc.supabase.co/auth/v1/.well-known/jwks.json",
     "SUPABASE_JWT_ISSUER": "https://bauswallqyrtmngsvpxc.supabase.co/auth/v1",
-    "EMAIL_FROM": "Vehicle Doc Lanka <reminders@example.com>"
+    "EMAIL_FROM": "Vehicle Doc Lanka <onboarding@resend.dev>"
   },
   "ratelimits": [
     {

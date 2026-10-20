@@ -7,7 +7,9 @@
     "cf-typegen": "wrangler types --env-interface CloudflareBindings --strict-vars false",
     "deploy:prod": "wrangler deploy --minify --env production",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dev-token": "node scripts/dev-token.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.9.1",

@@ -13,6 +13,8 @@ Hono API on Cloudflare Workers + Supabase for the Vehicle Doc Lanka mobile app, 
 - `npx hono search <q>` / `npx hono docs <path>`: current Hono docs. Use these instead of guessing APIs.
 - Schema: `npx supabase migration new <name>` → `npx supabase db push` → `npx supabase gen types typescript --project-id <id> > src/types/db.ts` → run Security Advisor
 - Cron locally: `npx wrangler dev --test-scheduled`, then GET `/__scheduled?cron=0+2+*+*+*` (sends real pushes/emails for due rows)
+- Live smoke test: `npm run dev-token` (a dev email/password test user from `SMOKE_EMAIL`/`SMOKE_PASSWORD` → gitignored `.smoke-token`), then `npm run smoke` (every route; `BASE_URL` defaults to localhost:8787, soft-deletes what it creates)
+- Windows: stopping wrangler can leave `workerd.exe` running with old secrets, and a new `npm run dev` then moves to the next port. Kill it before restarting after editing `.dev.vars`.
 
 After any change: typecheck, run tests, and hit the changed routes with `npx hono request`.
 
@@ -33,6 +35,7 @@ src/
   types/db.ts   # generated, never edit by hand
 supabase/migrations  # source of truth for the DB schema (supabase/tests: SQL smoke tests)
 test/helpers/        # test JWT/JWKS signing, Supabase fetch stub, setupHarness(); cron.ts: cron fakes
+scripts/             # dev-token.mjs, smoke.mjs (live smoke test, not part of `npm run test`)
 ```
 
 ## Core rules (never break these)
@@ -119,7 +122,7 @@ Body: `{ lastSyncedAt | null, changes: { vehicles[], documents[] } }`. Rows are 
 ## Reminders
 
 - Rows: one per (reminder day × channel on in **both** profile and document), `send_on = expiry_date - days`, skipping `send_on < today` (today itself is kept). A deleted doc gets none. No expiry-day row (`days_before = 0` is unused, since reminderDays are 1..365).
-- **The SQL `rebuild_reminders` RPC is the source of truth**: it reads the doc and profile itself, so it never trusts rows from the client. `buildReminderRows(doc, profile, today)` is a pure TS mirror for tests and later phases. Change both together.
+- **The SQL `rebuild_reminders` RPC is the source of truth**: it reads the doc and profile itself, so it never trusts rows from the client. `buildReminderRows(doc, profile, today)` is a pure TS mirror for tests. Change both together.
 - `lib/reminders.ts`: `rebuildReminders(client, doc)` → RPC with `[doc.id]`; `rebuildAllReminders(client)` → RPC for all live docs; `remindersChanged(before, after)` is the pure change check. RPC errors → `dbError`.
 - Daily cron `0 2 * * *` (07:30 Colombo, today from `scheduledTime`) in `cron/send-reminders.ts`, via `ctx.waitUntil`; service-role client, not an HTTP route. **At-most-once**: claim → send → finish, so a re-run or crash never resends.
 - Send-time decisions (`planDelivery` in `lib/reminder-message.ts`, pure): `skipped` with `document_deleted` (doc or vehicle), `push_off`/`email_off` (profile or doc), `no_email`, `no_devices`, `superseded` (several due rows per doc + channel: only the smallest days_before is sent).
@@ -140,13 +143,24 @@ Body: `{ lastSyncedAt | null, changes: { vehicles[], documents[] } }`. Rows are 
 
 - Secrets: `wrangler secret put` (prod) and `.dev.vars` (local, gitignored): `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `EXPO_ACCESS_TOKEN`.
 - Vars in `wrangler.jsonc`: `ENVIRONMENT`, `SUPABASE_URL`, `SUPABASE_JWKS_URL`, `SUPABASE_JWT_ISSUER`, `EMAIL_FROM`, plus `triggers.crons` and `ratelimits`. Dev and prod use separate Supabase projects.
+- Dev `EMAIL_FROM` is Resend's `onboarding@resend.dev`, which only delivers to the Resend account's own email and lands in Gmail spam. Prod needs a verified Resend domain (SPF + DKIM, plus a DMARC record).
+- Supabase keys: legacy `anon` + `service_role` JWTs (or `sb_publishable_` + `sb_secret_`). Never put the anon key in `SUPABASE_SERVICE_ROLE_KEY`: cron claims then fail with 42501.
 
 ## Testing
 
-- Tests never hit live Supabase or the real JWKS. Route tests use `setupHarness()` (`test/helpers/api.ts`): local signed tokens, fake rate limiters and a Supabase fetch stub.
+- Tests never hit live Supabase or the real JWKS (`npm run smoke` is the separate live check). Route tests use `setupHarness()` (`test/helpers/api.ts`): local signed tokens, fake rate limiters and a Supabase fetch stub.
 - Cron tests use `setupCronFakes()` (`test/helpers/cron.ts`): in-memory claim/finish RPCs and devices, plus recording Expo/Resend fakes.
 - Spy on `rebuildReminders` with `vi.mock('../src/lib/reminders', ...)`, keeping the real exports via `importOriginal`.
 - Must cover: Colombo vs UTC dates, status boundaries, rebuildReminders, bad tokens → 401, user B → 404 on user A's rows, unknown fields/oversized/bad UUID → 400/413, sync conflict rules, and cron re-runs not resending.
+
+## Production deploy (first time; do each step with the user)
+
+1. Create the prod Supabase project: Google auth provider, the app's redirect URLs.
+2. `npx supabase link --project-ref <prod>` → `npx supabase db push` → Security Advisor (only WARN 0029 on the 3 user RPCs is expected). Re-link dev afterwards.
+3. Fill in `env.production.vars` in `wrangler.jsonc` (`SUPABASE_URL`, `SUPABASE_JWKS_URL`, `SUPABASE_JWT_ISSUER`, `EMAIL_FROM` on a verified Resend domain).
+4. `npx wrangler secret put <NAME> --env production` for the 4 secrets (the user types the values).
+5. `npm run deploy:prod`, then check `/v1/health` = 200, `BASE_URL=<prod url> npm run smoke` with a prod test user, and the cron trigger in the Cloudflare dashboard.
+6. On the Workers Paid plan, raise `SUBREQUEST_BUDGET` (`cron/send-reminders.ts`) to ~900.
 
 ## Out of scope (v1)
 
