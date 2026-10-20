@@ -132,7 +132,7 @@ describe('rebuildReminders / rebuildAllReminders', () => {
   })
 
   const client = async () => userClient(
-    { SUPABASE_URL: env.SUPABASE_URL, SUPABASE_ANON_KEY: 'test-anon-key' },
+    { SUPABASE_URL: env.SUPABASE_URL, SUPABASE_ANON_KEY: 'test-anon-key', GATEWAY_KEY: 'test-gateway-key' },
     await h.token(),
   )
 

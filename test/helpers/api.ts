@@ -3,6 +3,7 @@
 import { env } from 'cloudflare:workers'
 import { expect, vi } from 'vitest'
 import app from '../../src/app'
+import { resetJwksCache } from '../../src/lib/jwks'
 import { generateKey, signJwt, type TestKey } from './jwt'
 
 export const USER_A = '11111111-1111-4111-8111-111111111111'
@@ -13,6 +14,7 @@ export type SupabaseCall = {
   url: URL
   authorization: string | null
   apikey: string | null
+  gateway: string | null
   body: unknown
 }
 
@@ -20,6 +22,7 @@ type Handler = (call: SupabaseCall) => Response | Promise<Response>
 
 export type Harness = {
   limit: ReturnType<typeof vi.fn<RateLimit['limit']>>
+  writeLimit: ReturnType<typeof vi.fn<RateLimit['limit']>>
   strictLimit: ReturnType<typeof vi.fn<RateLimit['limit']>>
   /** Every request made to Supabase (excluding the JWKS). */
   calls: SupabaseCall[]
@@ -43,10 +46,12 @@ let key: TestKey | undefined
 
 /** Call in `beforeEach`; `vi.restoreAllMocks()` in `afterEach` undoes the fetch spy. */
 export async function setupHarness(): Promise<Harness> {
+  resetJwksCache()
   key ??= await generateKey('ES256', 'es-key')
   const signingKey = key
 
   const limit = vi.fn<RateLimit['limit']>().mockResolvedValue({ success: true })
+  const writeLimit = vi.fn<RateLimit['limit']>().mockResolvedValue({ success: true })
   const strictLimit = vi.fn<RateLimit['limit']>().mockResolvedValue({ success: true })
   const calls: SupabaseCall[] = []
   let handler: Handler = () => {
@@ -63,6 +68,7 @@ export async function setupHarness(): Promise<Harness> {
       url: new URL(req.url),
       authorization: req.headers.get('Authorization'),
       apikey: req.headers.get('apikey'),
+      gateway: req.headers.get('x-vdl-gateway'),
       body: text ? JSON.parse(text) : undefined,
     }
     calls.push(call)
@@ -73,7 +79,9 @@ export async function setupHarness(): Promise<Harness> {
     ...env,
     SUPABASE_ANON_KEY: 'test-anon-key',
     SUPABASE_SERVICE_ROLE_KEY: 'test-service-key',
+    GATEWAY_KEY: 'test-gateway-key',
     RATE_LIMITER: { limit },
+    WRITE_RATE_LIMITER: { limit: writeLimit },
     STRICT_RATE_LIMITER: { limit: strictLimit },
   })
 
@@ -102,6 +110,7 @@ export async function setupHarness(): Promise<Harness> {
 
   return {
     limit,
+    writeLimit,
     strictLimit,
     calls,
     supabase: (h) => {

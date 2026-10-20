@@ -89,6 +89,13 @@ describe('GET /v1/vehicles', () => {
     expect(params?.get('user_id')).toBe(`eq.${USER_A}`)
     expect(params?.get('deleted_at')).toBe('is.null')
   })
+
+  it('sends the Data API gateway key with the user token', async () => {
+    h.supabase(() => Response.json([]))
+    await h.authed('/v1/vehicles')
+    expect(h.calls[0]?.gateway).toBe('test-gateway-key')
+    expect(bearerSub(h.calls[0]?.authorization)).toBe(USER_A)
+  })
 })
 
 describe('POST /v1/vehicles', () => {

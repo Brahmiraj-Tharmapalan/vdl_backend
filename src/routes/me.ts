@@ -50,7 +50,8 @@ me.get('/', async (c) => {
   return c.json(toMe(c.var.user, data))
 })
 
-me.patch('/', validate('json', updateProfileBody), async (c) => {
+// Strict: a push/email toggle rebuilds every reminder of the user.
+me.patch('/', strictRateLimit, validate('json', updateProfileBody), async (c) => {
   const body = c.req.valid('json')
   if (body.reminderEmail && !isOwnEmail(c.var.user, body.reminderEmail)) {
     const details = [{ path: 'reminderEmail', message: 'Must be the email you signed in with' }]

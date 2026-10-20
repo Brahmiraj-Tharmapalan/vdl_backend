@@ -89,6 +89,13 @@ describe('GET /v1/me', () => {
 describe('PATCH /v1/me', () => {
   const patch = (body: unknown) => h.authed('/v1/me', { method: 'PATCH', ...json(body) })
 
+  it('uses the strict and write limiters (a toggle rebuilds all reminders)', async () => {
+    h.strictLimit.mockResolvedValue({ success: false })
+    await expectError(await patch({ theme: 'dark' }), 429, 'rate_limited')
+    expect(h.writeLimit).toHaveBeenCalledWith({ key: USER_A })
+    expect(h.calls).toHaveLength(0)
+  })
+
   it('sends only the given fields, in snake_case', async () => {
     h.supabase(() => Response.json([profile({ theme: 'dark', default_reminder_days: [14] })]))
     const res = await patch({ theme: 'dark', defaultReminderDays: [14], displayName: null })

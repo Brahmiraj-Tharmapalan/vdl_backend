@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import app from '../src/app'
+import { resetJwksCache } from '../src/lib/jwks'
 import { generateKey, signHs256, signJwt, type TestKey } from './helpers/jwt'
 
 // Test-only routes on the shared app instance; src has no test routes.
@@ -34,6 +35,7 @@ const testEnv = (): CloudflareBindings => ({
   SUPABASE_ANON_KEY: 'test-anon-key',
   SUPABASE_SERVICE_ROLE_KEY: 'test-service-key',
   RATE_LIMITER: { limit },
+  WRITE_RATE_LIMITER: { limit },
   STRICT_RATE_LIMITER: { limit },
 })
 
@@ -58,6 +60,7 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  resetJwksCache()
   limit.mockReset()
   limit.mockResolvedValue({ success: true })
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
@@ -189,6 +192,42 @@ describe('rate limit', () => {
     limit.mockResolvedValue({ success: false })
     const res = await call('/v1/__test/me', bearer(await signJwt(es, claims())))
     await expectError(res, 429, 'rate_limited')
+  })
+
+  it('applies the write limiter to writes only', async () => {
+    const token = await signJwt(es, claims())
+    await call('/v1/__test/me', bearer(token))
+    expect(limit).toHaveBeenCalledOnce()
+
+    limit.mockClear()
+    await call('/v1/__test/echo', { method: 'POST', body: 'x', ...bearer(token) })
+    expect(limit).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns 429 when a write is over the write limit', async () => {
+    // General limiter passes, write limiter fails.
+    limit.mockResolvedValueOnce({ success: true }).mockResolvedValueOnce({ success: false })
+    const res = await call('/v1/__test/echo', {
+      method: 'POST',
+      body: 'x',
+      ...bearer(await signJwt(es, claims())),
+    })
+    await expectError(res, 429, 'rate_limited')
+  })
+})
+
+describe('request id', () => {
+  it('ignores a client-sent X-Request-Id and returns its own', async () => {
+    const res = await call('/v1/health', { headers: { 'X-Request-Id': 'forged-id' } })
+    const id = res.headers.get('X-Request-Id')
+    expect(id).toMatch(/^[0-9a-f-]{36}$/)
+    expect(id).not.toBe('forged-id')
+  })
+
+  it('puts the same id on error responses and in the body', async () => {
+    const res = await call('/v1/__test/me')
+    const body = await expectError(res, 401, 'unauthorized')
+    expect(res.headers.get('X-Request-Id')).toBe(body.error.requestId)
   })
 })
 

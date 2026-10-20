@@ -8,7 +8,7 @@ import type { AppEnv } from './env'
 import { errorBody, toErrorResponse } from './lib/errors'
 import { auth } from './middleware/auth'
 import { logger } from './middleware/logger'
-import { rateLimit } from './middleware/rate-limit'
+import { rateLimit, writeRateLimit } from './middleware/rate-limit'
 import dashboard from './routes/dashboard'
 import devices from './routes/devices'
 import documents from './routes/documents'
@@ -22,13 +22,15 @@ const PUBLIC_PATHS = ['/v1/health']
 
 const app = new Hono<AppEnv>()
 
-app.use(requestId())
+// Always server-generated: a client-sent X-Request-Id would let callers forge log entries' ids.
+app.use(requestId({ headerName: '' }))
 app.use(logger)
 app.use(secureHeaders())
 // Responses carry personal data (plates, email): never let a cache or proxy keep them.
 app.use(async (c, next) => {
   await next()
   c.header('Cache-Control', 'no-store')
+  c.header('X-Request-Id', c.var.requestId)
 })
 app.use('/v1/sync', bodyLimit({ maxSize: 1024 * KB }))
 app.use(except('/v1/sync', bodyLimit({ maxSize: 100 * KB })))
@@ -36,6 +38,7 @@ app.use(timeout(10_000))
 // Everything except /health needs auth, including unknown paths (no route probing).
 app.use(except(PUBLIC_PATHS, auth()))
 app.use(except(PUBLIC_PATHS, rateLimit))
+app.use(except(PUBLIC_PATHS, writeRateLimit))
 
 app.get('/v1/health', (c) => c.json({ status: 'ok' }))
 app.route('/v1/me', me)

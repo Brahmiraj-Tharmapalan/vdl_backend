@@ -4,20 +4,26 @@ import { limitReached } from './errors'
 
 type SupabaseEnv = Pick<
   CloudflareBindings,
-  'SUPABASE_URL' | 'SUPABASE_ANON_KEY' | 'SUPABASE_SERVICE_ROLE_KEY'
+  'SUPABASE_URL' | 'SUPABASE_ANON_KEY' | 'SUPABASE_SERVICE_ROLE_KEY' | 'GATEWAY_KEY'
 >
 
 // Stateless server clients: never store or refresh a session.
 const auth = { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
 
-/** Per-request client acting as the user, so RLS applies. */
+/** Header the DB's PostgREST pre-request check requires (migrations/*_data_api_gateway.sql). */
+export const GATEWAY_HEADER = 'x-vdl-gateway'
+
+/**
+ * Per-request client acting as the user, so RLS applies. The gateway header lets it through the
+ * Data API, which rejects the same user JWT sent directly from outside the Worker.
+ */
 export function userClient(
-  env: Pick<SupabaseEnv, 'SUPABASE_URL' | 'SUPABASE_ANON_KEY'>,
+  env: Pick<SupabaseEnv, 'SUPABASE_URL' | 'SUPABASE_ANON_KEY' | 'GATEWAY_KEY'>,
   token: string,
 ): SupabaseClient<Database> {
   return createClient<Database>(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
     auth,
-    global: { headers: { Authorization: `Bearer ${token}` } },
+    global: { headers: { Authorization: `Bearer ${token}`, [GATEWAY_HEADER]: env.GATEWAY_KEY } },
   })
 }
 
