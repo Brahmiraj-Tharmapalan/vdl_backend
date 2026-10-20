@@ -13,7 +13,7 @@ export const DOCUMENT_TYPES = [
 export const THEMES = ['system', 'light', 'dark'] as const
 export const PLATFORMS = ['ios', 'android'] as const
 export const REMINDER_CHANNELS = ['push', 'email'] as const
-export const REMINDER_STATUSES = ['scheduled', 'sent', 'failed', 'skipped'] as const
+export const REMINDER_STATUSES = ['scheduled', 'sending', 'sent', 'failed', 'skipped'] as const
 
 export type VehicleType = (typeof VEHICLE_TYPES)[number]
 export type DocumentType = (typeof DOCUMENT_TYPES)[number]

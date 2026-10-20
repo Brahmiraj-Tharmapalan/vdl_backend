@@ -100,6 +100,7 @@ describe('mappers', () => {
       channel: 'push',
       status: 'failed',
       sent_at: null,
+      claimed_at: null,
       error: 'Expo said no',
       created_at: TS,
       updated_at: TS,

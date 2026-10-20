@@ -170,6 +170,7 @@ export type Database = {
       reminders: {
         Row: {
           channel: string
+          claimed_at: string | null
           created_at: string
           days_before: number
           document_id: string
@@ -183,6 +184,7 @@ export type Database = {
         }
         Insert: {
           channel: string
+          claimed_at?: string | null
           created_at?: string
           days_before: number
           document_id: string
@@ -196,6 +198,7 @@ export type Database = {
         }
         Update: {
           channel?: string
+          claimed_at?: string | null
           created_at?: string
           days_before?: number
           document_id?: string
@@ -258,6 +261,30 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      claim_due_reminders: {
+        Args: { p_limit?: number; p_today: string }
+        Returns: {
+          channel: string
+          custom_name: string
+          days_before: number
+          doc_deleted_at: string
+          doc_email_enabled: boolean
+          doc_push_enabled: boolean
+          doc_type: string
+          document_id: string
+          expiry_date: string
+          id: string
+          nickname: string
+          plate_number: string
+          profile_email_enabled: boolean
+          profile_push_enabled: boolean
+          reminder_email: string
+          send_on: string
+          user_id: string
+          vehicle_deleted_at: string
+        }[]
+      }
+      finish_reminders: { Args: { p_results: Json }; Returns: undefined }
       rebuild_reminders: {
         Args: { p_document_ids?: string[] }
         Returns: undefined

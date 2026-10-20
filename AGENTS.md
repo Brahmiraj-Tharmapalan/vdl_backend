@@ -12,7 +12,7 @@ Hono API on Cloudflare Workers + Supabase for the Vehicle Doc Lanka mobile app, 
 - `npx hono request /v1/health src/app.ts`: call `app.request()` without a server. Run from PowerShell, because Git Bash rewrites the leading `/`.
 - `npx hono search <q>` / `npx hono docs <path>`: current Hono docs. Use these instead of guessing APIs.
 - Schema: `npx supabase migration new <name>` → `npx supabase db push` → `npx supabase gen types typescript --project-id <id> > src/types/db.ts` → run Security Advisor
-- Cron locally: `npx wrangler dev --test-scheduled`, then GET `/__scheduled?cron=0+2+*+*+*`
+- Cron locally: `npx wrangler dev --test-scheduled`, then GET `/__scheduled?cron=0+2+*+*+*` (sends real pushes/emails for due rows)
 
 After any change: typecheck, run tests, and hit the changed routes with `npx hono request`.
 
@@ -27,12 +27,12 @@ src/
   env.ts        # AppEnv = { Bindings, Variables: { user, supabase, requestId } }
   middleware/   # auth, rate-limit, logger
   routes/       # me, dashboard, vehicles, documents, reminders, sync, devices
-  lib/          # supabase, errors, validator, status, dates, mappers, reminders, dashboard, sync, push, email
+  lib/          # supabase, errors, validator, status, dates, mappers, reminders, reminder-message, dashboard, sync, push, email
   cron/         # send-reminders.ts
   schemas/      # zod schemas (json, query, params); shared primitives in common.ts
   types/db.ts   # generated, never edit by hand
 supabase/migrations  # source of truth for the DB schema (supabase/tests: SQL smoke tests)
-test/helpers/        # test JWT/JWKS signing, Supabase fetch stub, setupHarness()
+test/helpers/        # test JWT/JWKS signing, Supabase fetch stub, setupHarness(); cron.ts: cron fakes
 ```
 
 ## Core rules (never break these)
@@ -53,7 +53,7 @@ test/helpers/        # test JWT/JWKS signing, Supabase fetch stub, setupHarness(
 - `profiles`: id (= auth user), display_name, reminder_email, push_enabled, email_enabled, default_reminder_days int[], theme, last_synced_at
 - `vehicles`: id, user_id, nickname, plate_number, type (car | motorbike | three_wheeler | van), client_updated_at, deleted_at
 - `documents`: id, user_id, vehicle_id, type (revenue_licence | insurance | emission_test | registration | custom), custom_name, expiry_date, reminder_days int[], push_enabled, email_enabled, client_updated_at, deleted_at
-- `reminders`: id, user_id, document_id, days_before, send_on, channel (push | email), status (scheduled | sent | failed | skipped), sent_at, error; unique (document_id, days_before, channel, send_on), so a Renew gets fresh rows while sent history stays
+- `reminders`: id, user_id, document_id, days_before, send_on, channel (push | email), status (scheduled | sending | sent | failed | skipped), sent_at, error (short code), claimed_at; unique (document_id, days_before, channel, send_on), so a Renew gets fresh rows while sent history stays
 - `devices`: id, user_id, push_token unique, platform (ios | android), device_name, last_seen_at
 - All tables have `created_at` + `updated_at`. A trigger always sets `updated_at = now()`, so it is the trusted sync cursor.
 - `client_updated_at` (vehicles, documents) is the client's `updatedAt`, used only for last-write-wins and never exposed. Sync sets it. An update that leaves it unchanged (every REST write) gets `now()` from a trigger.
@@ -62,6 +62,7 @@ RPCs (`security definer`):
 - `register_device(p_push_token, p_platform, p_device_name)`: upserts a device by push token for `auth.uid()`, taking it over from another account. Used by `POST /v1/devices`.
 - `rebuild_reminders(p_document_ids uuid[] default null)`: for the caller's docs (null = all live ones; foreign/missing ids skipped) deletes `scheduled` rows, then inserts the new ones with Colombo "today" and `on conflict do nothing`. Used by `lib/reminders.ts`.
 - `sync_changes(p_last_synced_at default null, p_vehicles jsonb, p_documents jsonb)`: the whole sync push + pull in one transaction (see Sync). It bypasses RLS, so every statement filters by `auth.uid()`. Smoke test: `npx supabase db query --linked --yes -f supabase/tests/sync_smoke.sql` (rolled back).
+- Cron only (execute granted to `service_role` alone): `claim_due_reminders(p_today, p_limit)` first fails `sending` rows claimed > 1 h ago (`interrupted`), then sets due `scheduled` rows of whole users to `sending` and returns them joined with doc/vehicle/profile. `finish_reminders(p_results jsonb)` sets `sending` rows to sent/failed/skipped, or back to `scheduled` (never attempted). Smoke test: `supabase/tests/cron_smoke.sql`.
 
 Rules:
 - RLS on every table: `user_id = (select auth.uid())` for using + with check (`id` for profiles). Users may only select `reminders`.
@@ -120,8 +121,13 @@ Body: `{ lastSyncedAt | null, changes: { vehicles[], documents[] } }`. Rows are 
 - Rows: one per (reminder day × channel on in **both** profile and document), `send_on = expiry_date - days`, skipping `send_on < today` (today itself is kept). A deleted doc gets none. No expiry-day row (`days_before = 0` is unused, since reminderDays are 1..365).
 - **The SQL `rebuild_reminders` RPC is the source of truth**: it reads the doc and profile itself, so it never trusts rows from the client. `buildReminderRows(doc, profile, today)` is a pure TS mirror for tests and later phases. Change both together.
 - `lib/reminders.ts`: `rebuildReminders(client, doc)` → RPC with `[doc.id]`; `rebuildAllReminders(client)` → RPC for all live docs; `remindersChanged(before, after)` is the pure change check. RPC errors → `dbError`.
-- Daily cron `0 2 * * *` (07:30 Colombo) uses the service-role client and is not an HTTP route. It picks `status = 'scheduled' and send_on <= today` and marks reminders for deleted docs `skipped`. It pushes to **all** of a user's devices when profile + document push are on, and deletes `DeviceNotRegistered` tokens. It sends one email per user (with user text HTML-escaped) and marks rows `sent`/`failed`. It works in batches of 100, is safe to re-run, and one user's failure doesn't stop the others.
-- Message: `Insurance · CAB-1234 expires in 5 days (24 Oct 2026)`.
+- Daily cron `0 2 * * *` (07:30 Colombo, today from `scheduledTime`) in `cron/send-reminders.ts`, via `ctx.waitUntil`; service-role client, not an HTTP route. **At-most-once**: claim → send → finish, so a re-run or crash never resends.
+- Send-time decisions (`planDelivery` in `lib/reminder-message.ts`, pure): `skipped` with `document_deleted` (doc or vehicle), `push_off`/`email_off` (profile or doc), `no_email`, `no_devices`, `superseded` (several due rows per doc + channel: only the smallest days_before is sent).
+- Push (`lib/push.ts`): Expo, ≤ 100 messages per request, to **all** the user's devices; sent if any ticket is ok. `DeviceNotRegistered` tokens are deleted. Push receipts are not checked (out of scope).
+- Email (`lib/email.ts`): one per user to `reminder_email`, HTML (user text escaped) + text, via Resend `/emails/batch`; a 400/422 batch is retried one by one so a bad address fails only its user.
+- Stored errors are codes only (`expo_<code|status>`, `resend_<status>`), never provider text, tokens or emails. Logs: one JSON summary line of counts.
+- Workers Free: `SUBREQUEST_BUDGET = 45` per run (~5 per batch of ~100 rows). Rows beyond it are released or left `scheduled` for the next run.
+- Message: `Insurance · CAB-1234 expires in 5 days (24 Oct 2026)`; also `in 1 day`, `today`, `expired`.
 
 ## Hono conventions
 
@@ -138,6 +144,7 @@ Body: `{ lastSyncedAt | null, changes: { vehicles[], documents[] } }`. Rows are 
 ## Testing
 
 - Tests never hit live Supabase or the real JWKS. Route tests use `setupHarness()` (`test/helpers/api.ts`): local signed tokens, fake rate limiters and a Supabase fetch stub.
+- Cron tests use `setupCronFakes()` (`test/helpers/cron.ts`): in-memory claim/finish RPCs and devices, plus recording Expo/Resend fakes.
 - Spy on `rebuildReminders` with `vi.mock('../src/lib/reminders', ...)`, keeping the real exports via `importOriginal`.
 - Must cover: Colombo vs UTC dates, status boundaries, rebuildReminders, bad tokens → 401, user B → 404 on user A's rows, unknown fields/oversized/bad UUID → 400/413, sync conflict rules, and cron re-runs not resending.
 
