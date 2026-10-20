@@ -252,6 +252,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      rebuild_reminders: {
+        Args: { p_document_ids?: string[] }
+        Returns: undefined
+      }
       register_device: {
         Args: {
           p_device_name?: string

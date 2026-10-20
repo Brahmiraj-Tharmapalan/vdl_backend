@@ -1,19 +1,62 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Database, Tables } from '../types/db'
+import { addDays, type IsoDate } from './dates'
+import { dbError } from './supabase'
 
 type Doc = Tables<'documents'>
+type Profile = Pick<Tables<'profiles'>, 'push_enabled' | 'email_enabled'>
+
+export type ReminderChannel = 'push' | 'email'
+
+export type ReminderRow = {
+  days_before: number
+  send_on: IsoDate
+  channel: ReminderChannel
+}
 
 /**
- * Rebuilds a document's `scheduled` reminder rows (AGENTS.md rule 8).
+ * The reminder rows a document should have. Mirrors the `rebuild_reminders` SQL function, which
+ * is the source of truth (supabase/migrations/*_rebuild_reminders.sql); keep them in sync.
  *
- * STUB until P6: does nothing. P6 replaces the body with a call to a `security definer`
- * `rebuild_reminders` RPC, because users can only select `reminders`. Routes already call it
- * on create, delete and any change that `remindersChanged()` reports.
+ * One row per (reminder day × channel enabled on both profile and document), with
+ * `send_on = expiry_date - days`. Rows with `send_on` before `today` are skipped. There is no
+ * expiry-day (days_before = 0) row: days come only from `reminder_days` (1..365).
+ */
+export function buildReminderRows(
+  doc: Pick<Doc, 'expiry_date' | 'reminder_days' | 'push_enabled' | 'email_enabled' | 'deleted_at'>,
+  profile: Profile,
+  today: IsoDate,
+): ReminderRow[] {
+  if (doc.deleted_at !== null) return []
+  const channels: ReminderChannel[] = []
+  if (profile.push_enabled && doc.push_enabled) channels.push('push')
+  if (profile.email_enabled && doc.email_enabled) channels.push('email')
+  const rows: ReminderRow[] = []
+  for (const days of doc.reminder_days) {
+    const send_on = addDays(doc.expiry_date, -days)
+    if (send_on < today) continue
+    for (const channel of channels) rows.push({ days_before: days, send_on, channel })
+  }
+  return rows
+}
+
+/**
+ * Rebuilds a document's `scheduled` reminder rows (AGENTS.md rule 8) via the `security definer`
+ * `rebuild_reminders` RPC, because users can only select `reminders`.
  */
 export async function rebuildReminders(
-  _client: SupabaseClient<Database>,
-  _doc: Doc,
-): Promise<void> {}
+  client: SupabaseClient<Database>,
+  doc: Pick<Doc, 'id'>,
+): Promise<void> {
+  const { error } = await client.rpc('rebuild_reminders', { p_document_ids: [doc.id] })
+  if (error) throw dbError(error)
+}
+
+/** Rebuilds reminders for all the caller's live documents (profile channel toggles changed). */
+export async function rebuildAllReminders(client: SupabaseClient<Database>): Promise<void> {
+  const { error } = await client.rpc('rebuild_reminders', {})
+  if (error) throw dbError(error)
+}
 
 const sameDays = (a: readonly number[], b: readonly number[]) =>
   a.length === b.length && a.every((d, i) => d === b[i])

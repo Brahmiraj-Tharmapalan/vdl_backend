@@ -216,6 +216,7 @@ describe('DELETE /v1/vehicles/:id', () => {
     expect(h.calls[1]?.body).toEqual({ deleted_at: deletedAt })
     expect(h.calls[2]?.body).toEqual({ deleted_at: deletedAt })
     expect(rebuildReminders).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(rebuildReminders).mock.calls.map(([, d]) => d.id)).toEqual([DOC_ID, VEHICLE_ID])
   })
 
   it("returns 404 for user B on user A's vehicle without touching documents", async () => {
@@ -259,6 +260,7 @@ describe('POST /v1/vehicles/:id/documents', () => {
       email_enabled: true,
     })
     expect(rebuildReminders).toHaveBeenCalledTimes(1)
+    expect(rebuildReminders).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: DOC_ID }))
   })
 
   it('skips the profile when reminderDays is given', async () => {
@@ -274,6 +276,7 @@ describe('POST /v1/vehicles/:id/documents', () => {
     const update = h.calls.find((c) => table(c) === 'documents' && c.method === 'PATCH')
     expect(update?.url.searchParams.get('vehicle_id')).toBe(`eq.${VEHICLE_ID}`)
     expect(rebuildReminders).toHaveBeenCalledTimes(1)
+    expect(rebuildReminders).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: DOC_ID }))
   })
 
   it('returns 409 when the document id is taken', async () => {

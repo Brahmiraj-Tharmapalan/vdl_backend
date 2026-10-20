@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { AppEnv, AuthUser } from '../env'
 import { notFound } from '../lib/errors'
 import { toProfile } from '../lib/mappers'
+import { rebuildAllReminders } from '../lib/reminders'
 import { dbError, serviceClient } from '../lib/supabase'
 import { validate } from '../lib/validator'
 import { strictRateLimit } from '../middleware/rate-limit'
@@ -40,14 +41,19 @@ me.get('/', async (c) => {
 })
 
 me.patch('/', validate('json', updateProfileBody), async (c) => {
+  const body = c.req.valid('json')
   const { data, error } = await c.var.supabase
     .from('profiles')
-    .update(toProfileUpdate(c.req.valid('json')))
+    .update(toProfileUpdate(body))
     .eq('id', c.var.user.id)
     .select('*')
     .maybeSingle()
   if (error) throw dbError(error)
   if (!data) throw notFound()
+  // Reminder rows exist only for channels on in both profile and document.
+  if (body.pushEnabled !== undefined || body.emailEnabled !== undefined) {
+    await rebuildAllReminders(c.var.supabase)
+  }
   return c.json(toMe(c.var.user, data))
 })
 

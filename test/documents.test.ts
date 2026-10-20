@@ -125,6 +125,7 @@ describe('PATCH /v1/documents/:id', () => {
     expect(await res.json()).toMatchObject({ expiryDate: '2027-10-25', status: 'valid' })
     expect(h.calls[1]?.body).toEqual({ expiry_date: '2027-10-25' })
     expect(rebuildReminders).toHaveBeenCalledTimes(1)
+    expect(rebuildReminders).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: DOC_ID }))
   })
 
   it.each([
@@ -135,6 +136,7 @@ describe('PATCH /v1/documents/:id', () => {
     stub()
     await patch(body)
     expect(rebuildReminders).toHaveBeenCalledTimes(1)
+    expect(rebuildReminders).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: DOC_ID }))
   })
 
   it('does not rebuild when only non-reminder fields change', async () => {
@@ -199,6 +201,7 @@ describe('DELETE /v1/documents/:id', () => {
     expect(call?.body).toEqual({ deleted_at: '2026-10-20T06:00:00.000Z' })
     expect(call?.url.searchParams.get('deleted_at')).toBe('is.null')
     expect(rebuildReminders).toHaveBeenCalledTimes(1)
+    expect(rebuildReminders).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: DOC_ID }))
   })
 
   it("returns 404 for user B on user A's (or an already deleted) document", async () => {

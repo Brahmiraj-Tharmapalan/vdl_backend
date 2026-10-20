@@ -98,6 +98,34 @@ describe('PATCH /v1/me', () => {
     expect(call?.method).toBe('PATCH')
     expect(call?.url.searchParams.get('id')).toBe(`eq.${USER_A}`)
     expect(call?.body).toEqual({ theme: 'dark', default_reminder_days: [14], display_name: null })
+    expect(h.calls).toHaveLength(1) // no reminder rebuild without a channel toggle
+  })
+
+  it.each([
+    ['pushEnabled', { pushEnabled: false }],
+    ['emailEnabled', { emailEnabled: true }],
+  ])('rebuilds all reminders when %s is sent', async (_name, body) => {
+    h.supabase((call) =>
+      call.url.pathname.startsWith('/rest/v1/rpc/')
+        ? new Response(null, { status: 204 })
+        : Response.json([profile()]),
+    )
+    expect((await patch(body)).status).toBe(200)
+    const rpc = h.calls[1]
+    expect(rpc?.method).toBe('POST')
+    expect(rpc?.url.pathname).toBe('/rest/v1/rpc/rebuild_reminders')
+    expect(rpc?.body).toEqual({})
+    expect(bearerSub(rpc?.authorization)).toBe(USER_A)
+  })
+
+  it('returns 500 when the reminder rebuild fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    h.supabase((call) =>
+      call.url.pathname.startsWith('/rest/v1/rpc/')
+        ? Response.json({ code: 'XX000', message: 'boom' }, { status: 500 })
+        : Response.json([profile()]),
+    )
+    await expectError(await patch({ pushEnabled: true }), 500, 'internal_error')
   })
 
   it.each([
