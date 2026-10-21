@@ -167,6 +167,28 @@ describe('PATCH /v1/me', () => {
     expect(JSON.stringify(body)).not.toContain('someone-else')
     expect(h.calls).toHaveLength(0)
   })
+
+  it('returns 400 (not 500) when the DB rejects an unconfirmed reminderEmail', async () => {
+    h.supabase(() =>
+      Response.json(
+        { code: '23514', message: 'reminder_email must be the confirmed account email' },
+        { status: 400 },
+      ),
+    )
+    const res = await patch({ reminderEmail: '1111@example.com' })
+    const body = await expectError(res, 400, 'validation_failed')
+    expect(JSON.stringify(body)).toContain('reminderEmail')
+    expect(JSON.stringify(body)).not.toContain('confirmed account email')
+    expect(h.calls).toHaveLength(1)
+  })
+
+  it('still returns 500 for other check violations', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    h.supabase(() =>
+      Response.json({ code: '23514', message: 'violates check constraint "x"' }, { status: 400 }),
+    )
+    await expectError(await patch({ theme: 'dark' }), 500, 'internal_error')
+  })
 })
 
 describe('DELETE /v1/me', () => {

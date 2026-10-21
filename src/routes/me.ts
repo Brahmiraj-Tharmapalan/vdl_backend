@@ -30,9 +30,12 @@ function toProfileUpdate(body: UpdateProfileBody): TablesUpdate<'profiles'> {
 /** DELETE /me needs a sign-in this recent, so a leaked token alone can't delete the account. */
 export const REAUTH_WINDOW_S = 10 * 60
 
+/** Postgres check_violation; raised by the check_reminder_email trigger for an unconfirmed email. */
+const CHECK_VIOLATION = '23514'
+
 /**
- * Reminders may only go to the account's own (provider-verified) email, so the service can't be
- * used to mail strangers. Compared case-insensitively.
+ * Reminders may only go to the account's own email, so the service can't be used to mail
+ * strangers. Compared case-insensitively. The DB additionally requires it to be confirmed.
  */
 const isOwnEmail = (user: AuthUser, email: string) =>
   user.email !== undefined && user.email.toLowerCase() === email.toLowerCase()
@@ -53,9 +56,15 @@ me.get('/', async (c) => {
 // Strict: a push/email toggle rebuilds every reminder of the user.
 me.patch('/', strictRateLimit, validate('json', updateProfileBody), async (c) => {
   const body = c.req.valid('json')
+  const badReminderEmail = (message: string) =>
+    c.json(
+      errorBody('validation_failed', 'Invalid request', c.var.requestId, [
+        { path: 'reminderEmail', message },
+      ]),
+      400,
+    )
   if (body.reminderEmail && !isOwnEmail(c.var.user, body.reminderEmail)) {
-    const details = [{ path: 'reminderEmail', message: 'Must be the email you signed in with' }]
-    return c.json(errorBody('validation_failed', 'Invalid request', c.var.requestId, details), 400)
+    return badReminderEmail('Must be the email you signed in with')
   }
   const { data, error } = await c.var.supabase
     .from('profiles')
@@ -63,6 +72,10 @@ me.patch('/', strictRateLimit, validate('json', updateProfileBody), async (c) =>
     .eq('id', c.var.user.id)
     .select('*')
     .maybeSingle()
+  // The DB also requires that email to be confirmed (check_reminder_email trigger).
+  if (error?.code === CHECK_VIOLATION && error.message.includes('reminder_email')) {
+    return badReminderEmail('Confirm your email address first')
+  }
   if (error) throw dbError(error)
   if (!data) throw notFound()
   // Reminder rows exist only for channels on in both profile and document.

@@ -207,6 +207,33 @@ await expect('PATCH /devices/:id/seen', 'PATCH', `/v1/devices/${device?.id}/seen
 await expect('DELETE /devices/:id → 204', 'DELETE', `/v1/devices/${device?.id}`, 204)
 await expect('DELETE /devices/:id again → 404', 'DELETE', `/v1/devices/${device?.id}`, 404)
 
+// --- Data API gateway: the same token sent straight to Supabase must be refused ---
+// SUPABASE_URL / SUPABASE_ANON_KEY come from the env (set them for prod), else the dev values in
+// wrangler.jsonc / .dev.vars. Expect 401/403 from the private.check_gateway pre-request.
+const readFile = (path) => (existsSync(path) ? readFileSync(path, 'utf8') : '')
+const supabaseUrl = (
+  process.env.SUPABASE_URL ?? readFile('wrangler.jsonc').match(/"SUPABASE_URL":\s*"([^"]+)"/)?.[1] ?? ''
+).replace(/\/$/, '')
+const anonKey =
+  process.env.SUPABASE_ANON_KEY ?? readFile('.dev.vars').match(/^SUPABASE_ANON_KEY=(.+)$/m)?.[1]?.trim()
+if (!supabaseUrl || !anonKey) {
+  console.log('SKIP  direct Data API checks (set SUPABASE_URL and SUPABASE_ANON_KEY)')
+} else {
+  const direct = async (path, init = {}) => {
+    const res = await fetch(`${supabaseUrl}${path}`, {
+      ...init,
+      headers: { apikey: anonKey, Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+    })
+    await res.text()
+    return res.status
+  }
+  const blocked = (status) => status === 401 || status === 403
+  const rest = await direct('/rest/v1/vehicles?select=id&limit=1')
+  check('direct REST select → 401/403 (gateway)', blocked(rest), `got ${rest}`)
+  const rpc = await direct('/rest/v1/rpc/rebuild_reminders', { method: 'POST', body: '{}' })
+  check('direct RPC call → 401/403 (gateway)', blocked(rpc), `got ${rpc}`)
+}
+
 // --- Cleanup (soft deletes) ---
 await expect('DELETE /documents/:id → 204', 'DELETE', `/v1/documents/${d2}`, 204)
 await expect('GET deleted document → 404', 'GET', `/v1/documents/${d2}`, 404)

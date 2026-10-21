@@ -12,6 +12,9 @@ const claimsSchema = z.object({
   role: z.literal('authenticated'),
   // `jwk` only checks exp when present, so require it here.
   exp: z.number(),
+  // Anonymous Supabase users also get role `authenticated`. They would allow unlimited accounts
+  // without Google sign-in (sidestepping the per-user limits and quotas), so reject them.
+  is_anonymous: z.literal(false).optional(),
   email: z.string().optional(),
   session_id: z.string().optional(),
   // Supabase's sign-in methods with their times. Unlike iat, these survive token refreshes.

@@ -13,7 +13,7 @@ Hono API on Cloudflare Workers + Supabase for the Vehicle Doc Lanka mobile app, 
 - `npx hono search <q>` / `npx hono docs <path>`: current Hono docs. Use these instead of guessing APIs.
 - Schema: `npx supabase migration new <name>` → `npx supabase db push` → `npx supabase gen types typescript --project-id <id> > src/types/db.ts` → run Security Advisor
 - Cron locally: `npx wrangler dev --test-scheduled`, then GET `/__scheduled?cron=0+2+*+*+*` (sends real pushes/emails for due rows)
-- Live smoke test: `npm run dev-token` (a dev email/password test user from `SMOKE_EMAIL`/`SMOKE_PASSWORD` → gitignored `.smoke-token`), then `npm run smoke` (every route; `BASE_URL` defaults to localhost:8787, soft-deletes what it creates)
+- Live smoke test: `npm run dev-token` (a dev email/password test user from `SMOKE_EMAIL`/`SMOKE_PASSWORD` → gitignored `.smoke-token`), then `npm run smoke` (every route, plus a direct Data API call that must get 401/403 from the gateway; `BASE_URL` defaults to localhost:8787; for prod also set `SUPABASE_URL`/`SUPABASE_ANON_KEY`; soft-deletes what it creates)
 - Windows: stopping wrangler can leave `workerd.exe` running with old secrets, and a new `npm run dev` then moves to the next port. Kill it before restarting after editing `.dev.vars`.
 
 After any change: typecheck, run tests, and hit the changed routes with `npx hono request`.
@@ -65,7 +65,7 @@ RPCs (`security definer`):
 - `register_device(p_push_token, p_platform, p_device_name)`: upserts a device by push token for `auth.uid()`, taking it over from another account, and keeps ≤ 10 devices per user (evicts the least recently seen). Used by `POST /v1/devices`.
 - `rebuild_reminders(p_document_ids uuid[] default null)`: for the caller's docs (null = all live ones; foreign/missing ids skipped) deletes `scheduled` rows, then inserts the new ones with Colombo "today" and `on conflict do nothing`. Used by `lib/reminders.ts`.
 - `sync_changes(p_last_synced_at default null, p_vehicles jsonb, p_documents jsonb)`: the whole sync push + pull in one transaction (see Sync). Rejects > 500 rows per array (22023), then calls the internal `sync_changes_unchecked` (no grants). It bypasses RLS, so every statement filters by `auth.uid()`. Smoke test: `npx supabase db query --linked --yes -f supabase/tests/sync_smoke.sql` (rolled back).
-- Cron only (execute granted to `service_role` alone): `claim_due_reminders(p_today, p_limit)` first fails `sending` rows claimed > 1 h ago (`interrupted`), then sets all due `scheduled` rows of `p_limit` users (oldest due `send_on` first, ties by a daily md5 hash, never by user_id) to `sending` and returns them joined with doc/vehicle/profile. `finish_reminders(p_results jsonb)` sets `sending` rows to sent/failed/skipped, or back to `scheduled` (never attempted). Smoke test: `supabase/tests/cron_smoke.sql`. `supabase/tests/harden_smoke.sql` covers the hardening rules below.
+- Cron only (execute granted to `service_role` alone): `claim_due_reminders(p_today, p_limit)` first fails `sending` rows claimed > 1 h ago (`interrupted`), then sets all due `scheduled` rows of `p_limit` users (oldest due `send_on` first, ties by a daily md5 hash, never by user_id) to `sending` and returns them joined with doc/vehicle/profile (`reminder_email` only if the auth email is confirmed, else null → `no_email`). `finish_reminders(p_results jsonb)` sets `sending` rows to sent/failed/skipped, or back to `scheduled` (never attempted). Smoke test: `supabase/tests/cron_smoke.sql`. `supabase/tests/harden_smoke.sql` covers the hardening rules below.
 
 Rules:
 - RLS on every table: `user_id = (select auth.uid())` for using + with check (`id` for profiles). Users may only select `reminders`.
@@ -75,7 +75,7 @@ Rules:
 - Defense in depth, in case the Data API is reached directly anyway, the DB enforces every rule itself, not just the Worker:
   - Quotas (`enforce_user_quota` trigger, SQLSTATE `VDL01` → `dbError` → 409 `limit_reached`): vehicles 50 live / 500 total, documents 300 live / 3000 total. Upserts of existing ids don't count.
   - Column-level grants: users write only the columns the routes write (no `client_updated_at`, `created_at`, `last_synced_at`, `user_id` updates; no direct device inserts). Add a column to a grant when a route starts writing it.
-  - `client_updated_at` is clamped to ≤ now() + 5 min. A soft-deleted vehicle/document can't be updated (`keep_deleted` skips it). `reminder_email` must be the auth user's email (trigger, case-insensitive).
+  - `client_updated_at` is clamped to ≤ now() + 5 min. A soft-deleted vehicle/document can't be updated (`keep_deleted` skips it). `reminder_email` must be the auth user's **confirmed** email (trigger, case-insensitive). It is set at sign-up only if the email is already confirmed (Google), else when it gets confirmed (`on_auth_user_email_confirmed`).
 - When RLS blocks a write a route needs, add a `security definer` RPC instead of using the service role. It must `set search_path = ''`, take the user only from `auth.uid()`, `revoke execute ... from public, anon` and `grant ... to authenticated`.
 
 ## Request pipeline (`src/app.ts`)
@@ -83,7 +83,7 @@ Rules:
 `requestId()` (always server-generated; client `X-Request-Id` ignored) → logger (JSON, no PII) → `secureHeaders()` → `Cache-Control: no-store` → `bodyLimit` 100 KB (`/v1/sync` 1 MB) → `timeout(10_000)` → `auth` → `rateLimit` → `writeRateLimit` → routes with `validate()` → `app.onError` + `app.notFound`.
 
 - No CORS (mobile only) and no CSRF (Bearer tokens, no cookies). `/v1/health` is the only public route. An unknown path without a valid token gets `401`, not `404`.
-- **Auth** (`middleware/auth.ts`): Hono `jwk` with `keys` from `lib/jwks.ts` (in-memory JWKS cache: 10 min TTL, an unknown `kid` refetches at most once/min, stale keys kept if a refetch fails; never `jwks_uri`, which fetches per request), `ES256`/`RS256` only. It checks `iss`, `aud = 'authenticated'`, `role = 'authenticated'`, `sub` and `exp`, else `401`. The token comes only from `Authorization: Bearer`. It sets `c.var.user = { id, email, sessionId, signedInAt }` (`signedInAt` = latest `amr` timestamp, which survives refreshes, unlike `iat`) and `c.var.supabase = userClient(env, token)`.
+- **Auth** (`middleware/auth.ts`): Hono `jwk` with `keys` from `lib/jwks.ts` (in-memory JWKS cache: 10 min TTL, an unknown `kid` refetches at most once/min, stale keys kept if a refetch fails; never `jwks_uri`, which fetches per request), `ES256`/`RS256` only. It checks `iss`, `aud = 'authenticated'`, `role = 'authenticated'`, `sub` and `exp`, and rejects anonymous users (`is_anonymous: true`), else `401`. The token comes only from `Authorization: Bearer`. It sets `c.var.user = { id, email, sessionId, signedInAt }` (`signedInAt` = latest `amr` timestamp, which survives refreshes, unlike `iat`) and `c.var.supabase = userClient(env, token)`.
 - **Rate limits**, keyed by user ID: `RATE_LIMITER` 100/min on all authed routes. `WRITE_RATE_LIMITER` 30/min on every non-GET. `STRICT_RATE_LIMITER` 10/min via `strictRateLimit` on `/v1/sync`, `POST /v1/devices`, `PATCH /v1/me` (a toggle rebuilds all reminders) and `DELETE /v1/me`. Unauthenticated traffic is only limited by the Cloudflare WAF (prod).
 
 ## Validation, errors, logging
@@ -97,7 +97,7 @@ Rules:
 ## API (`/v1`)
 
 - `GET /health` (public)
-- `GET | PATCH | DELETE /me`: profile + settings. `reminderEmail` must be the sign-in email or null (else 400), so reminders can't be sent to strangers. DELETE needs a sign-in ≤ 10 min old (else 403 `reauth_required`: the app re-signs in), then removes the auth user, and the FKs cascade to all data.
+- `GET | PATCH | DELETE /me`: profile + settings. `reminderEmail` must be the confirmed sign-in email or null (else 400), so reminders can't be sent to strangers. DELETE needs a sign-in ≤ 10 min old (else 403 `reauth_required`: the app re-signs in), then removes the auth user, and the FKs cascade to all data.
 - `GET /dashboard`: `{ counts: { vehicles, documents, toRenew }, upcoming }`. Only live docs on live vehicles count. `upcoming` = 5 soonest `expiry_date` (expired first; ties by created_at, id), each `toDocument` + `vehicle` summary. Logic in `lib/dashboard.ts`.
 - `GET | POST /vehicles`, `GET | PATCH | DELETE /vehicles/:id`
 - `GET /documents?filter=all|to_renew|valid`, `POST /vehicles/:id/documents`, `GET | PATCH | DELETE /documents/:id` (PATCH with a new expiryDate = Renew)
@@ -162,10 +162,10 @@ Body: `{ lastSyncedAt | null, changes: { vehicles[], documents[] } }`. Rows are 
 
 1. Create the prod Supabase project: Google auth provider, the app's redirect URLs. **Disable email signups** (Google only), so accounts can't be farmed to dodge per-user limits; create the smoke test user from the dashboard.
 2. `npx supabase link --project-ref <prod>` → `npx supabase db push` → Security Advisor (only WARN 0029 on the 3 user RPCs is expected). Then set the gateway hash (see Database). Re-link dev afterwards.
-3. Fill in `env.production.vars` in `wrangler.jsonc` (`SUPABASE_URL`, `SUPABASE_JWKS_URL`, `SUPABASE_JWT_ISSUER`, `EMAIL_FROM` on a verified Resend domain).
+3. Fill in `env.production` in `wrangler.jsonc`: `vars` (`SUPABASE_URL`, `SUPABASE_JWKS_URL`, `SUPABASE_JWT_ISSUER`, `EMAIL_FROM` on a verified Resend domain) and the `routes` custom-domain placeholder (`api.example.com`). `workers_dev` and `preview_urls` are already off, because WAF rules don't apply to `*.workers.dev`.
 4. `npx wrangler secret put <NAME> --env production` for the 5 secrets (the user types the values).
 5. `npm run deploy:prod`, then check `/v1/health` = 200, `BASE_URL=<prod url> npm run smoke` with a prod test user, and the cron trigger in the Cloudflare dashboard.
-6. Supabase Auth: JWT expiry ≤ 1 h (tokens aren't revocable), leaked password protection on. Cloudflare: serve prod from a custom domain (`routes` + `"workers_dev": false` in `env.production`), because WAF rules don't apply to `*.workers.dev`, then add a WAF rate-limit rule by IP for `/v1/*` (the binding limits are per user, after auth).
+6. Supabase Auth: JWT expiry ≤ 1 h (tokens aren't revocable), leaked password protection on. Anonymous sign-ins off, email confirmation on. Cloudflare: add a WAF rate-limit rule by IP for `/v1/*` on the custom domain (the binding limits are per user, after auth).
 7. On the Workers Paid plan, raise `SUBREQUEST_BUDGET` (`cron/send-reminders.ts`) to ~900.
 
 ## Out of scope (v1)

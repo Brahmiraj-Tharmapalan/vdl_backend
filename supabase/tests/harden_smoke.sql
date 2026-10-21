@@ -2,11 +2,27 @@
 -- Run: npx supabase db query --linked --yes -f supabase/tests/harden_smoke.sql
 begin;
 
-insert into auth.users (id, aud, role, email) values
-  ('e0000000-0000-4000-8000-00000000000e', 'authenticated', 'authenticated', 'e@smoke.test'),
+insert into auth.users (id, aud, role, email, email_confirmed_at) values
+  ('e0000000-0000-4000-8000-00000000000e', 'authenticated', 'authenticated', 'e@smoke.test', now()),
+  -- Unconfirmed: must not get a reminder_email until the email is confirmed.
+  ('a0000000-0000-4000-8000-00000000000a', 'authenticated', 'authenticated', 'a@smoke.test', null),
   -- Claim order: Q has the lower id, P has waited longer.
-  ('f1000000-0000-4000-8000-0000000000f1', 'authenticated', 'authenticated', 'p@smoke.test'),
-  ('f0000000-0000-4000-8000-0000000000f0', 'authenticated', 'authenticated', 'q@smoke.test');
+  ('f1000000-0000-4000-8000-0000000000f1', 'authenticated', 'authenticated', 'p@smoke.test', now()),
+  ('f0000000-0000-4000-8000-0000000000f0', 'authenticated', 'authenticated', 'q@smoke.test', now());
+
+-- reminder_email only for a confirmed email (as the owner; the triggers still run).
+do $$
+begin
+  assert (select reminder_email = 'e@smoke.test' from public.profiles where id = 'e0000000-0000-4000-8000-00000000000e'), 'confirmed user gets reminder_email';
+  assert (select reminder_email is null from public.profiles where id = 'a0000000-0000-4000-8000-00000000000a'), 'unconfirmed user gets no reminder_email';
+  begin
+    update public.profiles set reminder_email = 'a@smoke.test' where id = 'a0000000-0000-4000-8000-00000000000a';
+    raise exception 'unconfirmed reminder_email accepted';
+  exception when check_violation then null;
+  end;
+  update auth.users set email_confirmed_at = now() where id = 'a0000000-0000-4000-8000-00000000000a';
+  assert (select reminder_email = 'a@smoke.test' from public.profiles where id = 'a0000000-0000-4000-8000-00000000000a'), 'confirming fills reminder_email';
+end $$;
 
 select set_config('request.jwt.claims', '{"sub":"e0000000-0000-4000-8000-00000000000e","role":"authenticated"}', true);
 

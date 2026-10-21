@@ -90,12 +90,19 @@ describe('auth', () => {
     expect(res.status).toBe(200)
   })
 
+  it('accepts a token with is_anonymous: false (what Supabase sends for real users)', async () => {
+    const res = await call('/v1/__test/me', bearer(await signJwt(es, claims({ is_anonymous: false }))))
+    expect(res.status).toBe(200)
+  })
+
   it.each([
     ['expired', () => signJwt(es, claims({ exp: now() - 60 }))],
     ['without exp', () => signJwt(es, claims({ exp: undefined }))],
     ['from a wrong issuer', () => signJwt(es, claims({ iss: 'https://evil.example/auth/v1' }))],
     ['for a wrong audience', () => signJwt(es, claims({ aud: 'anon' }))],
     ['for the anon role', () => signJwt(es, claims({ role: 'anon' }))],
+    ['for an anonymous user', () => signJwt(es, claims({ is_anonymous: true }))],
+    ['with a non-boolean is_anonymous', () => signJwt(es, claims({ is_anonymous: 'false' }))],
     ['missing sub', () => signJwt(es, claims({ sub: undefined }))],
     ['with an empty sub', () => signJwt(es, claims({ sub: '' }))],
     ['HS256', () => signHs256('es-key', claims())],
