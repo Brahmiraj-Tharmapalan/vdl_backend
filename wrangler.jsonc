@@ -43,16 +43,16 @@
     "production": {
       "name": "vdl-backend",
       // Serve prod only from the custom domain: WAF rules (incl. the per-IP rate limit) don't apply
-      // to *.workers.dev or preview URLs. Replace the placeholder with the real API hostname.
+      // to *.workers.dev or preview URLs. Requires the brahmiraj.com zone in this Cloudflare account.
       "workers_dev": false,
       "preview_urls": false,
-      "routes": [{ "pattern": "api.example.com", "custom_domain": true }],
+      "routes": [{ "pattern": "vdl-api.brahmiraj.com", "custom_domain": true }],
       "vars": {
         "ENVIRONMENT": "production",
         "SUPABASE_URL": "https://your-prod-project.supabase.co",
         "SUPABASE_JWKS_URL": "https://your-prod-project.supabase.co/auth/v1/.well-known/jwks.json",
         "SUPABASE_JWT_ISSUER": "https://your-prod-project.supabase.co/auth/v1",
-        "EMAIL_FROM": "Vehicle Doc Lanka <reminders@example.com>"
+        "EMAIL_FROM": "Vehicle Doc Lanka <reminders@mail.brahmiraj.com>"
       },
       "ratelimits": [
         {

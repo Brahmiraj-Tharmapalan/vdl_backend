@@ -2,7 +2,7 @@ import { createMiddleware } from 'hono/factory'
 import type { AppEnv } from '../env'
 import { rateLimited } from '../lib/errors'
 
-type LimiterName = 'RATE_LIMITER' | 'WRITE_RATE_LIMITER' | 'STRICT_RATE_LIMITER'
+ type LimiterName = 'RATE_LIMITER' | 'WRITE_RATE_LIMITER' | 'STRICT_RATE_LIMITER'
 
 /** Limits per user (not IP). Must run after `auth`. */
 const limitBy = (binding: LimiterName) =>

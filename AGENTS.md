@@ -162,7 +162,7 @@ Body: `{ lastSyncedAt | null, changes: { vehicles[], documents[] } }`. Rows are 
 
 1. Create the prod Supabase project: Google auth provider, the app's redirect URLs. **Disable email signups** (Google only), so accounts can't be farmed to dodge per-user limits; create the smoke test user from the dashboard.
 2. `npx supabase link --project-ref <prod>` → `npx supabase db push` → Security Advisor (only WARN 0029 on the 3 user RPCs is expected). Then set the gateway hash (see Database). Re-link dev afterwards.
-3. Fill in `env.production` in `wrangler.jsonc`: `vars` (`SUPABASE_URL`, `SUPABASE_JWKS_URL`, `SUPABASE_JWT_ISSUER`, `EMAIL_FROM` on a verified Resend domain) and the `routes` custom-domain placeholder (`api.example.com`). `workers_dev` and `preview_urls` are already off, because WAF rules don't apply to `*.workers.dev`.
+3. Fill in `env.production` in `wrangler.jsonc`: `vars` (`SUPABASE_URL`, `SUPABASE_JWKS_URL`, `SUPABASE_JWT_ISSUER`, `EMAIL_FROM` = `reminders@mail.brahmiraj.com`, verified in Resend) and the `routes` custom domain (`vdl-api.brahmiraj.com`, zone must be on Cloudflare). `workers_dev` and `preview_urls` are already off, because WAF rules don't apply to `*.workers.dev`.
 4. `npx wrangler secret put <NAME> --env production` for the 5 secrets (the user types the values).
 5. `npm run deploy:prod`, then check `/v1/health` = 200, `BASE_URL=<prod url> npm run smoke` with a prod test user, and the cron trigger in the Cloudflare dashboard.
 6. Supabase Auth: JWT expiry ≤ 1 h (tokens aren't revocable), leaked password protection on. Anonymous sign-ins off, email confirmation on. Cloudflare: add a WAF rate-limit rule by IP for `/v1/*` on the custom domain (the binding limits are per user, after auth).
