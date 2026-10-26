@@ -49,9 +49,9 @@
       "routes": [{ "pattern": "vdl-api.brahmiraj.com", "custom_domain": true }],
       "vars": {
         "ENVIRONMENT": "production",
-        "SUPABASE_URL": "https://your-prod-project.supabase.co",
-        "SUPABASE_JWKS_URL": "https://your-prod-project.supabase.co/auth/v1/.well-known/jwks.json",
-        "SUPABASE_JWT_ISSUER": "https://your-prod-project.supabase.co/auth/v1",
+        "SUPABASE_URL": "https://sbqptzedvuqjqgtrdrnt.supabase.co",
+        "SUPABASE_JWKS_URL": "https://sbqptzedvuqjqgtrdrnt.supabase.co/auth/v1/.well-known/jwks.json",
+        "SUPABASE_JWT_ISSUER": "https://sbqptzedvuqjqgtrdrnt.supabase.co/auth/v1",
         "EMAIL_FROM": "Vehicle Doc Lanka <reminders@mail.brahmiraj.com>"
       },
       "ratelimits": [

@@ -68,7 +68,7 @@ RPCs (`security definer`):
 - Cron only (execute granted to `service_role` alone): `claim_due_reminders(p_today, p_limit)` first fails `sending` rows claimed > 1 h ago (`interrupted`), then sets all due `scheduled` rows of `p_limit` users (oldest due `send_on` first, ties by a daily md5 hash, never by user_id) to `sending` and returns them joined with doc/vehicle/profile (`reminder_email` only if the auth email is confirmed, else null → `no_email`). `finish_reminders(p_results jsonb)` sets `sending` rows to sent/failed/skipped, or back to `scheduled` (never attempted). Smoke test: `supabase/tests/cron_smoke.sql`. `supabase/tests/harden_smoke.sql` covers the hardening rules below.
 
 Rules:
-- RLS on every table: `user_id = (select auth.uid())` for using + with check (`id` for profiles). Users may only select `reminders`.
+- RLS on every table: `user_id = (select auth.uid())` for using + with check (`id` for profiles). Users may only select `reminders`. Prod also has the dashboard's "automatic RLS" event trigger; a migration revokes direct execute on its `rls_auto_enable()` (no-op elsewhere).
 - A document's `vehicle_id` must be the same user's (composite FK + policy + code).
 - `check` constraints match the zod limits. A trigger creates the `profiles` row on `auth.users` insert.
 - **Data API gateway:** PostgREST's pre-request `private.check_gateway()` rejects (42501) every REST/RPC/GraphQL request without header `x-vdl-gateway` = the Worker's `GATEWAY_KEY` (only its sha256 is stored, in `private.gateway_key`; fails closed until set). `service_role` is exempt. Supabase Auth isn't affected. Smoke test: `supabase/tests/gateway_smoke.sql`.
